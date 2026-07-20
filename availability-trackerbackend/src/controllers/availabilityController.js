@@ -1,0 +1,130 @@
+import {
+  resolveOwner,
+  loadWeeklyAvailability,
+  getTemplateSlots,
+  applyAvailabilityChanges,
+  saveTemplateFromGrid,
+  validateChangesNotPast,
+  templateResponse,
+} from "../services/availabilityWeek.js";
+import { prisma } from "../lib/prisma.js";
+
+function canAccessOwner(callerId, callerRole, owner) {
+  const isOwn =
+    (owner.userId === callerId && !owner.mentorId) ||
+    (owner.mentorId === callerId && !owner.userId);
+  return isOwn || callerRole === "ADMIN";
+}
+
+export async function getWeekly(req, res, next) {
+  try {
+    const { userId: targetUserId, mentorId, weekStart, scope } = req.query;
+    const owner = resolveOwner(req.userId, req.userRole, { targetUserId, targetMentorId: mentorId });
+    if (!owner) {
+      return res.status(400).json({ error: "Pass either userId or mentorId, not both" });
+    }
+    if (!canAccessOwner(req.userId, req.userRole, owner)) {
+      return res.status(403).json({ error: "Cannot view another user's availability" });
+    }
+
+    const result = await loadWeeklyAvailability(owner, weekStart, scope);
+    
+    // Fetch user requirements
+    const user = await prisma.user.findUnique({
+      where: { id: owner.userId || owner.mentorId },
+      select: { requirementType: true, requirementDesc: true }
+    });
+    
+    if (user) {
+      result.requirementType = user.requirementType;
+      result.requirementDesc = user.requirementDesc;
+    }
+
+    res.json(result);
+  } catch (e) {
+    next(e);
+  }
+}
+
+export async function getTemplate(req, res, next) {
+  try {
+    const owner = resolveOwner(req.userId, req.userRole, {
+      targetUserId: req.query.userId,
+      targetMentorId: req.query.mentorId,
+    });
+    if (!owner) {
+      return res.status(400).json({ error: "Pass either userId or mentorId, not both" });
+    }
+    if (!canAccessOwner(req.userId, req.userRole, owner)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const slots = await getTemplateSlots(owner);
+    res.json({ slots: templateResponse(slots) });
+  } catch (e) {
+    next(e);
+  }
+}
+
+export async function saveBatch(req, res, next) {
+  try {
+    const { weekStart, scope, slots, pattern } = req.body;
+    const callerId = req.userId;
+    const role = req.userRole;
+
+    if (!weekStart) {
+      return res.status(400).json({ error: "weekStart required" });
+    }
+    if (scope !== "week" && scope !== "template") {
+      return res.status(400).json({ error: "scope must be 'week' or 'template'" });
+    }
+
+    let owner = resolveOwner(callerId, role, {
+      targetUserId: req.body.userId,
+      targetMentorId: req.body.mentorId,
+    });
+    if (!owner) {
+      return res.status(400).json({ error: "Pass either userId or mentorId, not both" });
+    }
+    if (!canAccessOwner(callerId, role, owner)) {
+      return res.status(403).json({ error: "Cannot modify another user's availability" });
+    }
+
+    if (req.body.requirementType !== undefined || req.body.requirementDesc !== undefined) {
+      await prisma.user.update({
+        where: { id: owner.userId || owner.mentorId },
+        data: {
+          ...(req.body.requirementType !== undefined && { requirementType: req.body.requirementType }),
+          ...(req.body.requirementDesc !== undefined && { requirementDesc: req.body.requirementDesc }),
+        }
+      });
+    }
+
+    if (scope === "template") {
+      const enabledPattern = Array.isArray(pattern)
+        ? pattern
+        : (Array.isArray(slots) ? slots.filter((s) => s.enabled) : []);
+
+      if (enabledPattern.length === 0 && !Array.isArray(pattern)) {
+        return res.status(400).json({ error: "pattern array required for template scope" });
+      }
+
+
+      await saveTemplateFromGrid(owner, enabledPattern, weekStart);
+      const result = await loadWeeklyAvailability(owner, weekStart, "template");
+      return res.json({ ok: true, scope: "template", ...result });
+    }
+
+    if (!Array.isArray(slots) || slots.length === 0) {
+      return res.status(400).json({ error: "slots array required for week scope" });
+    }
+
+    validateChangesNotPast(weekStart, slots);
+    await applyAvailabilityChanges(owner, weekStart, slots, "week");
+
+    const result = await loadWeeklyAvailability(owner, weekStart, "week");
+    res.json({ ok: true, scope: "week", ...result });
+  } catch (e) {
+    next(e);
+  }
+}

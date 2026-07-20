@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  USER
+  MENTOR
+  ADMIN
+}
+
+enum WeekFillStatus {
+  MATERIALIZED
+  CLEARED
+  MANUAL
+}
+
+// Call types for the mentoring scheduling system
+enum CallType {
+  MOCK_INTERVIEW
+  RESUME_REVAMP
+  JOB_MARKET_GUIDANCE
+  MOCK_INTERVIEW_FRONTEND
+  MOCK_INTERVIEW_BACKEND
+  MOCK_INTERVIEW_SYSTEM_DESIGN
+}
+
+model User {
+  id                 String   @id @default(uuid())
+  name               String
+  email              String   @unique
+  password           String
+  role               Role     @default(USER)
+  timezone           String   @default("UTC")
+  description        String?  @db.Text
+  tags               String[] @default([])
+  googleRefreshToken String?  @map("google_refresh_token")
+  createdAt          DateTime @default(now()) @map("created_at")
+  requirementType    CallType?
+  requirementDesc    String?  @db.Text
+
+  availabilityAsUser      Availability[]          @relation("UserAvailability")
+  availabilityAsMentor    Availability[]          @relation("MentorAvailability")
+  availabilityTemplate    AvailabilityTemplate?    @relation("UserTemplate")
+  mentorTemplate          AvailabilityTemplate?    @relation("MentorTemplate")
+  availabilityExceptions  AvailabilityException[]  @relation("UserExceptions")
+  mentorExceptions        AvailabilityException[]  @relation("MentorExceptions")
+  availabilityWeekMeta    AvailabilityWeekMeta[]   @relation("UserWeekMeta")
+  mentorWeekMeta          AvailabilityWeekMeta[]  @relation("MentorWeekMeta")
+  meetingsAsAdmin         Meeting[]               @relation("AdminMeetings")
+  meetingsAsUser          Meeting[]               @relation("UserMeetings")
+  meetingsAsMentor        Meeting[]               @relation("MentorMeetings")
+}
+
+model Availability {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id")
+  mentorId  String?  @map("mentor_id")
+  role      Role
+  date      DateTime @db.Date
+  startTime DateTime @map("start_time")
+  endTime   DateTime @map("end_time")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user   User? @relation("UserAvailability", fields: [userId], references: [id], onDelete: Cascade)
+  mentor User? @relation("MentorAvailability", fields: [mentorId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date, startTime], map: "availabilities_user_id_date_start_time_key")
+  @@unique([mentorId, date, startTime], map: "availabilities_mentor_id_date_start_time_key")
+  @@index([userId], map: "availabilities_user_id_idx")
+  @@index([mentorId], map: "availabilities_mentor_id_idx")
+  @@index([role], map: "availabilities_role_idx")
+  @@index([date], map: "availabilities_date_idx")
+  @@index([userId, date], map: "availabilities_user_id_date_idx")
+  @@index([mentorId, date], map: "availabilities_mentor_id_date_idx")
+  @@index([role, date], map: "availabilities_role_date_idx")
+  @@map("availabilities")
+}
+
+model AvailabilityTemplate {
+  id        String   @id @default(uuid())
+  userId    String?  @unique @map("user_id")
+  mentorId  String?  @unique @map("mentor_id")
+  role      Role
+  slots     Json     @default("[]")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user   User? @relation("UserTemplate", fields: [userId], references: [id], onDelete: Cascade)
+  mentor User? @relation("MentorTemplate", fields: [mentorId], references: [id], onDelete: Cascade)
+
+  @@map("availability_templates")
+}
+
+model AvailabilityException {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id")
+  mentorId  String?  @map("mentor_id")
+  role      Role
+  weekStart DateTime @map("week_start") @db.Date
+  dayOfWeek Int      @map("day_of_week")
+  hour      Int
+  enabled   Boolean
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user   User? @relation("UserExceptions", fields: [userId], references: [id], onDelete: Cascade)
+  mentor User? @relation("MentorExceptions", fields: [mentorId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekStart, dayOfWeek, hour], map: "availability_exceptions_user_week_slot_key")
+  @@unique([mentorId, weekStart, dayOfWeek, hour], map: "availability_exceptions_mentor_week_slot_key")
+  @@map("availability_exceptions")
+}
+
+model AvailabilityWeekMeta {
+  id        String         @id @default(uuid())
+  userId    String?        @map("user_id")
+  mentorId  String?        @map("mentor_id")
+  role      Role
+  weekStart DateTime       @map("week_start") @db.Date
+  status    WeekFillStatus
+  updatedAt DateTime       @updatedAt @map("updated_at")
+
+  user   User? @relation("UserWeekMeta", fields: [userId], references: [id], onDelete: Cascade)
+  mentor User? @relation("MentorWeekMeta", fields: [mentorId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekStart], map: "availability_week_meta_user_week_key")
+  @@unique([mentorId, weekStart], map: "availability_week_meta_mentor_week_key")
+  @@map("availability_week_meta")
+}
+
+model Meeting {
+  id              String    @id @default(uuid())
+  adminId         String    @map("admin_id")
+  title           String
+  callType        CallType? @map("call_type")
+  bookedUserId    String?   @map("booked_user_id")
+  bookedMentorId  String?   @map("booked_mentor_id")
+  startTime       DateTime  @map("start_time")
+  endTime         DateTime  @map("end_time")
+  what            String?
+  description     String?   @db.Text
+  meetLink        String?   @map("meet_link")
+  calendarEventId String?   @map("calendar_event_id")
+  googleEventId   String?   @map("google_event_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  admin        User                 @relation("AdminMeetings", fields: [adminId], references: [id], onDelete: Cascade)
+  user         User?                @relation("UserMeetings", fields: [bookedUserId], references: [id], onDelete: SetNull)
+  mentor       User?                @relation("MentorMeetings", fields: [bookedMentorId], references: [id], onDelete: SetNull)
+  participants MeetingParticipant[]
+}
+
+model MeetingParticipant {
+  id        String @id @default(uuid())
+  meetingId String @map("meeting_id")
+  email     String
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, email])
+  @@map("meeting_participants")
+}

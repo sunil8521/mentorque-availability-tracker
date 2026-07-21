@@ -216,7 +216,11 @@ export default function AdminDashboard() {
                 if (date < today) continue;
                 const uSlots = uAvail.availability[date] || [];
                 const mSlots = mAvail.availability[date] || [];
-                const overlap = uSlots.find(us => mSlots.some(ms => ms.startTime === us.startTime && ms.endTime === us.endTime));
+                const nowMs = Date.now();
+                const overlap = uSlots.find(us => 
+                  new Date(us.startTime).getTime() > nowMs && 
+                  mSlots.some(ms => ms.startTime === us.startTime && ms.endTime === us.endTime)
+                );
                 if (overlap) {
                   const timeStr = new Date(overlap.startTime).toLocaleTimeString("en-US", { hour: 'numeric', minute: '2-digit' });
                   let dayStr = date === today ? "Today" : date === tomorrow ? "Tomorrow" : new Date(date).toLocaleDateString("en-US", { weekday: 'short', month: 'short', day: 'numeric' });

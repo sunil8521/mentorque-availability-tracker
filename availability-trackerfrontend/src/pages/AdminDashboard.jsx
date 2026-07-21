@@ -358,7 +358,13 @@ export default function AdminDashboard() {
   // Derived stats
   const todaysMeetings = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
-    return meetings.filter(m => m.status !== "CANCELLED" && m.startTime?.slice(0, 10) === today && m.bookedMentorId);
+    const now = new Date();
+    return meetings.filter(m => 
+      m.status !== "CANCELLED" && 
+      m.startTime?.slice(0, 10) === today && 
+      new Date(m.endTime) > now &&
+      m.bookedMentorId
+    );
   }, [meetings]);
   const completedMeetings = useMemo(() => meetings.filter(m => m.status !== "CANCELLED" && new Date(m.endTime) < new Date() && m.bookedMentorId), [meetings]);
   const cancelledMeetings = useMemo(() => meetings.filter(m => m.status === "CANCELLED" && m.bookedMentorId), [meetings]);

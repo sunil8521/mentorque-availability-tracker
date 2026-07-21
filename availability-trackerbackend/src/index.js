@@ -2,20 +2,16 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-// DISABLED: jwt import was only used for debug-token endpoint
-// import jwt from "jsonwebtoken";
 import { authRoutes } from "./routes/auth.js";
 import { availabilityRoutes } from "./routes/availability.js";
 import { meetingRoutes } from "./routes/meeting.js";
 import { adminRoutes } from "./routes/admin.js";
-// DISABLED: Google OAuth routes (removed per assignment)
-// import { googleRouter } from "./routes/google.routes.js";
-// DISABLED: Integration routes (SSO-related)
-// import { integrationRoutes } from "./routes/integration.js";
+import requestRoutes from "./routes/request.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { prisma } from "./lib/prisma.js";
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT ;
 
 const allowedOrigins = [
   "https://availabilitytrackerfrontend.vercel.app",
@@ -45,36 +41,26 @@ app.use("/api/auth", authRoutes);
 app.use("/api/availability", availabilityRoutes);
 app.use("/api/meetings", meetingRoutes);
 app.use("/api/admin", adminRoutes);
-
-// DISABLED: SSO-related routes (removed per assignment)
-// app.use("/api/integration", integrationRoutes);
-// app.use("/api/google", googleRouter);
+app.use("/api/requests", requestRoutes);
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 
-// DISABLED: Debug token endpoint (was for SSO troubleshooting)
-// app.post("/debug-token", (req, res) => {
-//   const authHeader = req.headers.authorization;
-//   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-//   if (!token) return res.json({ error: "no token" });
-//   const JWT_SECRET = process.env.JWT_SECRET;
-//   const MAIN_SITE_JWT_SECRET = process.env.MAIN_SITE_JWT_SECRET || "your-secret-key-change-in-production";
-//   let decoded1 = null, err1 = null;
-//   let decoded2 = null, err2 = null;
-//   try { decoded1 = jwt.verify(token, JWT_SECRET); } catch(e) { err1 = e.message; }
-//   try { decoded2 = jwt.verify(token, MAIN_SITE_JWT_SECRET); } catch(e) { err2 = e.message; }
-//   const raw = jwt.decode(token);
-//   res.json({
-//     raw_payload: raw,
-//     verify_with_JWT_SECRET: decoded1 || err1,
-//     verify_with_MAIN_SITE_JWT_SECRET: decoded2 || err2,
-//     JWT_SECRET_set: !!JWT_SECRET,
-//     MAIN_SITE_JWT_SECRET_set: !!process.env.MAIN_SITE_JWT_SECRET,
-//   });
-// });
-
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+const startServer = async () => {
+  try {
+    console.log("Attempting to connect to the database...");
+    await prisma.$connect();
+    console.log("Successfully connected to the database!");
+
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error("Could not connect to the database. Exiting...");
+    console.error(err.message);
+    process.exit(1);
+  }
+};
+
+startServer();

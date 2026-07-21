@@ -3,10 +3,83 @@ import { DateTime } from "luxon";
 import { useAuth } from "../context/AuthContext";
 import * as adminApi from "../api/admin";
 import * as availabilityApi from "../api/availability";
+import { getWeekStartStr } from "../utils/time";
 import {
   Search, ChevronLeft, ChevronRight, Calendar, User, Clock,
-  CheckCircle2, Check, ArrowRight, FileText, History, Info, Sparkles
+  CheckCircle2, Check, ArrowRight, FileText, History, Info,
+  AlertTriangle, Users, CalendarCheck, XCircle, LayoutDashboard,
+  MoreVertical, TrendingUp, Filter, SortDesc, X, Video, UserCheck, Settings, BarChart3
 } from "lucide-react";
+
+function UserCard({ person, isMentor = false, onAction, actionText = "View Details", badgeText, subBadgeText, footerText }) {
+  const initials = person.name?.split(" ").map(n => n[0]).join("").toUpperCase().substring(0, 2) || "U";
+
+  return (
+    <div className="bg-[#0E0E16] border border-white/[0.08] rounded-2xl overflow-hidden hover:border-white/20 transition-all duration-300 flex flex-col justify-between group shadow-xl">
+      {/* Top Section */}
+      <div className="p-5 flex-1 flex flex-col space-y-3.5">
+        {/* Avatar + Header Info */}
+        <div className="flex items-start gap-3.5">
+          <div className={`w-11 h-11 rounded-full border flex items-center justify-center text-sm font-bold shrink-0 ${isMentor
+            ? "bg-amber-500/10 border-amber-500/20 text-amber-300"
+            : "bg-white/10 border-white/15 text-white"
+            }`}>
+            {initials}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+              <h3 className="text-sm font-bold text-white truncate">{person.name}</h3>
+              {badgeText && (
+                <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-white/10 text-white border border-white/15 uppercase tracking-wide whitespace-nowrap">
+                  {badgeText}
+                </span>
+              )}
+              {subBadgeText && (
+                <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20 whitespace-nowrap">
+                  {subBadgeText}
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-400 truncate mb-1">{person.email}</p>
+          </div>
+        </div>
+
+        {/* Tags Section */}
+        {person.tags && person.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pt-0.5">
+            {person.tags.map(t => (
+              <span key={t} className="text-[9px] font-medium px-2 py-0.5 rounded-md bg-[#161622] text-slate-300 border border-white/[0.06]">
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Description Section */}
+        {person.description && (
+          <p className="text-[11px] text-slate-400 line-clamp-3 leading-relaxed flex-1">
+            {person.description}
+          </p>
+        )}
+      </div>
+
+      {/* Bottom Footer Bar */}
+      <div className="bg-[#12121C] px-5 py-3 border-t border-white/[0.06] flex items-center justify-between group-hover:bg-white/[0.03] transition-colors">
+        <span className="text-[10px] text-slate-500 font-medium">
+          {footerText || (isMentor ? "Verified Mentor" : "Registered User")}
+        </span>
+        {onAction && (
+          <button
+            onClick={() => onAction(person)}
+            className="px-3.5 py-1.5 bg-[#1C1C28] hover:bg-[#252538] text-white text-[11px] font-bold rounded-xl transition border border-white/15 hover:border-white/25 shadow-md flex items-center gap-1.5"
+          >
+            {actionText} <ArrowRight className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function AdminDashboard() {
   const { user: authUser } = useAuth();
@@ -21,37 +94,40 @@ export default function AdminDashboard() {
   // Selection State
   const [selectedUser, setSelectedUser] = useState(null);
   const [selectedMentor, setSelectedMentor] = useState(null);
-  const [selectedSlot, setSelectedSlot] = useState(null); // { startTime, endTime }
+  const [selectedSlot, setSelectedSlot] = useState(null);
 
   // Availability State
   const [userAvail, setUserAvail] = useState(null);
   const [mentorAvail, setMentorAvail] = useState(null);
 
   // AI Recommendation State
-  const [aiLoadingState, setAiLoadingState] = useState(0); // 0=done, 1-5=loading steps
+  const [aiLoadingState, setAiLoadingState] = useState(0);
   const [aiRecommendations, setAiRecommendations] = useState([]);
   const [aiFallbackMentors, setAiFallbackMentors] = useState([]);
 
   // UI State
   const [searchQuery, setSearchQuery] = useState("");
-  const [leftTab, setLeftTab] = useState("Pending"); // "Pending" | "Scheduled"
-  const [activeTab, setActiveTab] = useState("Availability"); // "User Details" | "Availability" | "Requirements" | "History"
+  const [activeSection, setActiveSection] = useState("Pending");
   const [displayTz, setDisplayTz] = useState("IST");
-  const [availTab, setAvailTab] = useState("Upcoming"); // "Upcoming" | "All"
+  const [availTab, setAvailTab] = useState("Upcoming");
   const [bookingLoading, setBookingLoading] = useState(false);
+
+  // Modal State
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalView, setModalView] = useState("details"); // "details" | "schedule"
 
   // Initialization
   const weekStart = useMemo(() => {
     const today = new Date();
     const base = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-    return base.toISOString().slice(0, 10);
+    return getWeekStartStr(base);
   }, []);
 
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       const [u, m, mtgs] = await Promise.all([
-        adminApi.listUsers(), 
+        adminApi.listUsers(),
         adminApi.listMentors(),
         adminApi.listMeetings()
       ]);
@@ -65,17 +141,24 @@ export default function AdminDashboard() {
     }
   }, []);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData]);
 
   // Derived: Pending Users
   const pendingUsers = useMemo(() => {
     return users.filter(u => {
       if (!u.requirementType) return false;
-      if (u.meetingsAsUser && u.meetingsAsUser.length > 0) return false;
+      if (!u.hasFutureAvailability) return false;
+      const scheduledMeetings = (u.meetingsAsUser || []).filter(m => m.status === "SCHEDULED");
+      if (scheduledMeetings.length > 0) return false;
       return true;
-    }).filter(u => u.name.toLowerCase().includes(searchQuery.toLowerCase()) || u.email.toLowerCase().includes(searchQuery.toLowerCase()));
+    }).map(u => {
+      const cancelledMeetings = (u.meetingsAsUser || []).filter(m => m.status === "CANCELLED");
+      return { ...u, wasCancelled: cancelledMeetings.length > 0 };
+    }).filter(u => {
+      if (!searchQuery) return true;
+      const q = searchQuery.toLowerCase();
+      return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+    });
   }, [users, searchQuery]);
 
   // Load Availabilities when selected
@@ -96,94 +179,70 @@ export default function AdminDashboard() {
     }
   }, [selectedMentor, weekStart]);
 
-  // AI Recommendations logic
-  useEffect(() => {
-    if (selectedUser) {
-      let step = 1;
-      setAiLoadingState(step);
-      setAiRecommendations([]);
-      setAiFallbackMentors([]);
+  // AI Recommendations logic — triggered when user opens schedule view
+  // Two independent streams: (1) LLM recommendations, (2) overlap computation
+  const triggerAiRecommendations = useCallback(() => {
+    if (!selectedUser) return;
+    setAiLoadingState(1); // 1 = LLM loading
+    setAiRecommendations([]);
+    setAiFallbackMentors([]);
+    setMentorOverlaps({});
 
-      const interval = setInterval(() => {
-        step++;
-        if (step <= 5) {
-          setAiLoadingState(step);
-        }
-      }, 700);
+    // Stream 1: LLM recommendations (just user data, no availability sent)
+    adminApi.recommendMentors(selectedUser.id).then((res) => {
+      setAiRecommendations(res.recommendations || []);
+      setAiFallbackMentors(res.allMentors || []);
+      setAiLoadingState(0); // done
+    }).catch(e => {
+      console.error("LLM recommendation failed", e);
+      setAiLoadingState(0);
+      setAiFallbackMentors(mentors);
+    });
 
-      adminApi.recommendMentors(selectedUser.id).then(async (res) => {
-        clearInterval(interval);
-        setAiLoadingState(0);
-        
-        const recs = res.recommendations || [];
-        try {
-          const uAvail = await availabilityApi.getWeekly({ userId: selectedUser.id, weekStart });
-          
-          // Calculate top 5 fallback mentors to fetch their overlaps as well
-          const fallbackTop5 = [...mentors].map(m => ({
-            ...m,
-            score: m.tags.filter(t => selectedUser.tags.includes(t)).length
-          })).sort((a, b) => b.score - a.score).slice(0, 5);
-          
-          const mentorIdsToFetch = new Set([
-            ...recs.map(r => r.mentorId),
-            ...fallbackTop5.map(m => m.id)
-          ]);
-          
-          const newOverlaps = {};
-          const today = new Date().toISOString().slice(0, 10);
-          const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-          
-          await Promise.all(Array.from(mentorIdsToFetch).map(async (mId) => {
-            try {
-              const mAvail = await availabilityApi.getWeekly({ mentorId: mId, weekStart });
-              let overlapStr = "❌ No overlap";
-              
-              if (uAvail && uAvail.dates && mAvail && mAvail.dates) {
-                for (const date of uAvail.dates) {
-                  if (date < today) continue;
-                  const uSlots = uAvail.availability[date] || [];
-                  const mSlots = mAvail.availability[date] || [];
-                  const overlap = uSlots.find(us => mSlots.some(ms => ms.startTime === us.startTime && ms.endTime === us.endTime));
-                  
-                  if (overlap) {
-                    const timeStr = new Date(overlap.startTime).toLocaleTimeString("en-US", { hour: 'numeric', minute: '2-digit' });
-                    let dayStr = date === today ? "Today" : date === tomorrow ? "Tomorrow" : new Date(date).toLocaleDateString("en-US", { weekday: 'short', month: 'short', day: 'numeric' });
-                    overlapStr = `✅ ${dayStr} ${timeStr}`;
-                    break;
-                  }
+    // Stream 2: Compute overlaps for ALL mentors independently
+    (async () => {
+      try {
+        const uAvail = await availabilityApi.getWeekly({ userId: selectedUser.id, weekStart });
+        const today = new Date().toISOString().slice(0, 10);
+        const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+        const newOverlaps = {};
+
+        await Promise.all(mentors.map(async (m) => {
+          try {
+            const mAvail = await availabilityApi.getWeekly({ mentorId: m.id, weekStart });
+            let overlapStr = "❌ No overlap";
+            if (uAvail && uAvail.dates && mAvail && mAvail.dates) {
+              for (const date of uAvail.dates) {
+                if (date < today) continue;
+                const uSlots = uAvail.availability[date] || [];
+                const mSlots = mAvail.availability[date] || [];
+                const overlap = uSlots.find(us => mSlots.some(ms => ms.startTime === us.startTime && ms.endTime === us.endTime));
+                if (overlap) {
+                  const timeStr = new Date(overlap.startTime).toLocaleTimeString("en-US", { hour: 'numeric', minute: '2-digit' });
+                  let dayStr = date === today ? "Today" : date === tomorrow ? "Tomorrow" : new Date(date).toLocaleDateString("en-US", { weekday: 'short', month: 'short', day: 'numeric' });
+                  overlapStr = `✅ ${dayStr} ${timeStr}`;
+                  break;
                 }
               }
-              newOverlaps[mId] = overlapStr;
-            } catch (err) {
-              newOverlaps[mId] = "❌ Unknown";
             }
-          }));
-          
-          setMentorOverlaps(newOverlaps);
-        } catch (e) {
-          console.error("Failed to compute overlaps", e);
-        }
-        
-        setAiRecommendations(recs);
-        setAiFallbackMentors(res.allMentors || []);
-      }).catch(e => {
-        console.error(e);
-        clearInterval(interval);
-        setAiLoadingState(0);
-        setAiFallbackMentors(mentors);
-      });
+            newOverlaps[m.id] = overlapStr;
+          } catch {
+            newOverlaps[m.id] = "❌ Unknown";
+          }
+        }));
+        setMentorOverlaps(newOverlaps);
+      } catch (e) {
+        console.error("Failed to compute overlaps", e);
+      }
+    })();
+  }, [selectedUser, mentors, weekStart]);
 
-    } else {
-      setAiLoadingState(0);
-      setAiRecommendations([]);
-      setAiFallbackMentors([]);
-      setMentorOverlaps({});
-    }
-  }, [selectedUser, mentors]);
+  // Mentors with availability overlap (computed from mentorOverlaps state)
+  const availableMentors = useMemo(() => {
+    return mentors.filter(m => mentorOverlaps[m.id]?.startsWith("✅"));
+  }, [mentors, mentorOverlaps]);
 
   // Mentor Recommendations (Fallback)
-  // simple: fallback mentor computation
   const recommendedMentors = useMemo(() => {
     if (!selectedUser) return [];
     return [...mentors].map(m => {
@@ -196,36 +255,26 @@ export default function AdminDashboard() {
   const overlappingSlots = useMemo(() => {
     if (!userAvail || !mentorAvail || !userAvail.dates) return [];
     const overlaps = [];
-
     for (const date of userAvail.dates) {
       const uSlots = userAvail.availability[date] || [];
       const mSlots = mentorAvail.availability[date] || [];
-
       for (const us of uSlots) {
         for (const ms of mSlots) {
           const usStart = new Date(us.startTime).getTime();
           const usEnd = new Date(us.endTime).getTime();
           const msStart = new Date(ms.startTime).getTime();
           const msEnd = new Date(ms.endTime).getTime();
-
           const maxStart = Math.max(usStart, msStart);
           const minEnd = Math.min(usEnd, msEnd);
-
           if (maxStart < minEnd) {
-            overlaps.push({
-              date,
-              startTime: new Date(maxStart).toISOString(),
-              endTime: new Date(minEnd).toISOString(),
-            });
+            overlaps.push({ date, startTime: new Date(maxStart).toISOString(), endTime: new Date(minEnd).toISOString() });
           }
         }
       }
     }
-    const now = Date.now();
-    return overlaps.filter(s => new Date(s.startTime).getTime() > now);
+    return overlaps.filter(s => new Date(s.startTime).getTime() > Date.now());
   }, [userAvail, mentorAvail]);
 
-  // Group overlaps by date
   const groupedOverlaps = useMemo(() => {
     const groups = {};
     for (const slot of overlappingSlots) {
@@ -235,11 +284,25 @@ export default function AdminDashboard() {
     return groups;
   }, [overlappingSlots]);
 
+  const categorizedUserAvail = useMemo(() => {
+    if (!userAvail) return { past: {}, future: {} };
+    const past = {};
+    const future = {};
+    const now = Date.now();
+    for (const date of userAvail.dates || []) {
+      const slots = userAvail.availability[date] || [];
+      const pSlots = slots.filter(s => new Date(s.startTime).getTime() <= now);
+      const fSlots = slots.filter(s => new Date(s.startTime).getTime() > now);
+      if (pSlots.length > 0) past[date] = pSlots;
+      if (fSlots.length > 0) future[date] = fSlots;
+    }
+    return { past, future };
+  }, [userAvail]);
+
   // Handle Booking
-  // simple: scheduling logic handling
-  const handleSchedule = async (mentorId) => {
-    if (!selectedUser || !mentorId || !scheduleDate || !scheduleTime) {
-      alert("Please select a user, mentor, date, and time.");
+  const handleBookMeeting = async () => {
+    if (!selectedUser || !selectedMentor || !selectedSlot) {
+      alert("Please select a user, mentor, and an overlapping time slot.");
       return;
     }
     setBookingLoading(true);
@@ -252,10 +315,12 @@ export default function AdminDashboard() {
         bookedUserId: selectedUser.id,
         bookedMentorId: selectedMentor.id,
         callType: selectedUser.requirementType,
+        requestId: selectedUser.activeRequestId,
         what: selectedUser.requirementType,
         description: selectedUser.requirementDesc,
         participantEmails: [selectedUser.email, selectedMentor.email]
       });
+      setModalOpen(false);
       setSelectedUser(null);
       setSelectedMentor(null);
       setSelectedSlot(null);
@@ -276,646 +341,825 @@ export default function AdminDashboard() {
     });
   };
 
-  // simple: handle tab switching safely
-  const handleTabChange = (tab) => {
-    if (tab === "meetings" && scheduledMeetings.length === 0) {
-      // simple fetch wrapper
-      fetchMeetings();
-    }
-    setActiveTab(tab);
+  const timeAgo = (dateStr) => {
+    if (!dateStr) return "";
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
   };
 
+  // Derived stats
+  const todaysMeetings = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return meetings.filter(m => m.status !== "CANCELLED" && m.startTime?.slice(0, 10) === today && m.bookedMentorId);
+  }, [meetings]);
+  const completedMeetings = useMemo(() => meetings.filter(m => m.status !== "CANCELLED" && new Date(m.endTime) < new Date() && m.bookedMentorId), [meetings]);
+  const cancelledMeetings = useMemo(() => meetings.filter(m => m.status === "CANCELLED" && m.bookedMentorId), [meetings]);
+
+  const filteredMeetingsList = useMemo(() => {
+    let list = [];
+    if (activeSection === "Todays") list = todaysMeetings;
+    else if (activeSection === "Completed") list = completedMeetings;
+    else if (activeSection === "Cancelled") list = cancelledMeetings;
+    else return [];
+    if (!searchQuery) return list;
+    const q = searchQuery.toLowerCase();
+    return list.filter(m =>
+      (m.title && m.title.toLowerCase().includes(q)) ||
+      (m.user?.name && m.user.name.toLowerCase().includes(q)) ||
+      (m.mentor?.name && m.mentor.name.toLowerCase().includes(q))
+    );
+  }, [activeSection, todaysMeetings, completedMeetings, cancelledMeetings, searchQuery]);
+
+  // Open modal for user
+  const openUserModal = (u) => {
+    setSelectedUser(u);
+    setSelectedMentor(null);
+    setSelectedSlot(null);
+    setModalView("details");
+    setModalOpen(true);
+    setAiLoadingState(0);
+    setAiRecommendations([]);
+    setAiFallbackMentors([]);
+  };
+
+  // Switch to schedule view in modal
+  const openScheduleView = () => {
+    setModalView("schedule");
+    triggerAiRecommendations();
+  };
+
+  const sectionInfo = {
+    Pending: { title: "Pending Queue", desc: "Users waiting for mentor assignment" },
+    Todays: { title: "Today's Meetings", desc: "Meetings scheduled for today" },
+    Completed: { title: "Completed Meetings", desc: "Successfully completed sessions" },
+    Cancelled: { title: "Cancelled Meetings", desc: "Sessions that were cancelled" },
+    Mentors: { title: "Mentors Directory", desc: "Registered mentors and their tags" },
+    Users: { title: "Users Directory", desc: "All users registered on the platform" },
+    Availability: { title: "Team Availability Overview", desc: "Manage availability schedules" },
+    Reports: { title: "Analytics & Reports", desc: "Platform usage and meeting analytics" },
+    Settings: { title: "Settings", desc: "Configure admin options" },
+  };
+
+  const sidebarGroups = [
+    {
+      group: "REQUESTS",
+      items: [
+        { id: "Pending", label: "Pending Queue", icon: Users, count: pendingUsers.length },
+        { id: "Todays", label: "Today's Meetings", icon: Calendar, count: todaysMeetings.length },
+        { id: "Completed", label: "Completed Meetings", icon: CalendarCheck, count: completedMeetings.length },
+        { id: "Cancelled", label: "Cancelled Meetings", icon: XCircle, count: cancelledMeetings.length },
+      ]
+    },
+    {
+      group: "MANAGEMENT",
+      items: [
+        { id: "Mentors", label: "Mentors", icon: UserCheck, count: mentors.length },
+        { id: "Users", label: "Users", icon: User, count: users.length },
+        { id: "Availability", label: "Availability", icon: Clock },
+      ]
+    },
+    {
+      group: "SYSTEM",
+      items: [
+        { id: "Reports", label: "Reports", icon: FileText },
+        { id: "Settings", label: "Settings", icon: Settings },
+      ]
+    }
+  ];
+
   return (
-    <div className="max-w-[1600px] mx-auto w-full h-[calc(100vh-140px)] min-h-[680px] bg-[#08080C] text-white font-sans rounded-2xl border border-white/[0.08] flex overflow-hidden shadow-2xl">
-        {/* simple: main layout flexbox */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* simple: left sidebar */}
-          <div className="w-[330px] shrink-0 border-r border-white/[0.08] flex flex-col bg-[#0A0A10]">
-        <div className="p-5 border-b border-white/[0.08]">
-          <h1 className="text-lg font-bold mb-0.5 text-white">Pending Scheduling</h1>
-          <p className="text-xs text-slate-400 mb-4">Users awaiting mentor assignment</p>
+    <div className="flex flex-col lg:flex-row gap-6 text-white w-full items-stretch">
 
-          <div className="flex gap-2.5 mb-4">
-            <div 
-              onClick={() => setLeftTab("Pending")}
-              className={`rounded-xl p-3 flex-1 cursor-pointer transition ${leftTab === "Pending" ? "bg-[#A855F7]/10 border border-[#A855F7]/30" : "bg-[#12121C] border border-white/5 hover:border-white/10"}`}
-            >
-              <div className={`text-2xl font-bold ${leftTab === "Pending" ? "text-[#C084FC]" : "text-slate-300"}`}>{pendingUsers.length}</div>
-              <div className={`text-[10px] font-medium ${leftTab === "Pending" ? "text-[#D8B4FE]" : "text-slate-400"}`}>Pending Queue</div>
-            </div>
-            <div 
-              onClick={() => setLeftTab("Scheduled")}
-              className={`rounded-xl p-3 flex-1 cursor-pointer transition ${leftTab === "Scheduled" ? "bg-[#A855F7]/10 border border-[#A855F7]/30" : "bg-[#12121C] border border-white/5 hover:border-white/10"}`}
-            >
-              <div className={`text-2xl font-bold ${leftTab === "Scheduled" ? "text-[#C084FC]" : "text-slate-300"}`}>{meetings.length}</div>
-              <div className={`text-[10px] font-medium ${leftTab === "Scheduled" ? "text-[#D8B4FE]" : "text-slate-400"}`}>Scheduled</div>
-            </div>
+      {/* ═══ LEFT SIDEBAR ═══ */}
+      <aside className="w-full lg:w-[240px] shrink-0 bg-[#0A0A10] border border-white/[0.06] rounded-2xl flex flex-col p-4 lg:h-[calc(100vh-140px)] sticky top-20">
+        {/* Brand / Header */}
+        <div className="p-3 mb-3 bg-[#12121B] border border-white/[0.05] rounded-xl flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-[#1C1C28] border border-white/15 flex items-center justify-center shadow-sm">
+            <LayoutDashboard className="w-3.5 h-3.5 text-white" />
           </div>
+          <div>
+            <h1 className="text-xs font-bold text-white leading-none">Dashboard</h1>
+            <p className="text-[9px] text-slate-500 mt-0.5">Admin Panel</p>
+          </div>
+        </div>
 
-          <div className="relative">
-            <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
+        {/* Nav */}
+        <nav className="flex-1 space-y-4 overflow-y-auto">
+          {sidebarGroups.map((g, gi) => (
+            <div key={gi}>
+              <div className="text-[9px] font-bold text-slate-600 uppercase tracking-[0.15em] px-2 mb-1.5">{g.group}</div>
+              <div className="space-y-1">
+                {g.items.map(item => {
+                  const Icon = item.icon;
+                  const isActive = activeSection === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        if (item.id === "Settings") {
+                          window.location.href = "/admin/settings";
+                          return;
+                        }
+                        setActiveSection(item.id);
+                        setSearchQuery("");
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-semibold transition-all duration-200 select-none focus:outline-none focus:ring-0 ${isActive
+                        ? "bg-[#1C1C28] text-white shadow-sm border border-transparent"
+                        : "text-slate-400 hover:text-white hover:bg-white/[0.04] border border-transparent"
+                        }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <Icon className="w-4 h-4" />
+                        <span className="truncate">{item.label}</span>
+                      </div>
+                      {item.count !== undefined && item.count > 0 && (
+                        <span className={`min-w-[18px] text-center px-1.5 py-0.5 rounded-full text-[9px] font-bold ${isActive ? "bg-white/20" : "bg-white/5 text-slate-500"
+                          }`}>{item.count}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </nav>
+      </aside>
+
+      {/* ═══ MAIN CONTENT ═══ */}
+      <div className="flex-1 flex flex-col min-w-0 space-y-6">
+
+        {/* KPI Cards */}
+        <div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {[
+              { label: "Pending Requests", value: pendingUsers.length, icon: Users, iconBg: "bg-amber-500/10 border-amber-500/20", iconColor: "text-amber-400", sub: `${pendingUsers.filter(u => u.wasCancelled).length} rescheduling` },
+              { label: "Today's Meetings", value: todaysMeetings.length, icon: Calendar, iconBg: "bg-sky-500/10 border-sky-500/20", iconColor: "text-sky-400", sub: "active today" },
+              { label: "Completed", value: completedMeetings.length, icon: CalendarCheck, iconBg: "bg-emerald-500/10 border-emerald-500/20", iconColor: "text-emerald-400", sub: "total sessions" },
+              { label: "Cancelled", value: cancelledMeetings.length, icon: XCircle, iconBg: "bg-red-500/10 border-red-500/20", iconColor: "text-red-400", sub: "total cancelled" },
+            ].map((c, i) => {
+              const Icon = c.icon;
+              return (
+                <div key={i} className="bg-[#0E0E16] border border-white/[0.06] rounded-xl p-4 flex items-center gap-3.5 hover:border-white/[0.1] transition">
+                  <div className={`w-10 h-10 rounded-xl ${c.iconBg} border flex items-center justify-center shrink-0`}>
+                    <Icon className={`w-5 h-5 ${c.iconColor}`} />
+                  </div>
+                  <div>
+                    <div className="text-2xl font-extrabold text-white leading-none">{c.value}</div>
+                    <div className="text-[10px] text-slate-400 font-medium mt-0.5">{c.label}</div>
+                    <div className="text-[9px] text-slate-600 flex items-center gap-1 mt-0.5">
+                      <TrendingUp className="w-2.5 h-2.5" /> {c.sub}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Section Header */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-end gap-3 sm:gap-0 justify-between pt-2 pb-1">
+          <div>
+            <h2 className="text-lg font-bold text-white">{sectionInfo[activeSection].title}</h2>
+            <p className="text-xs text-slate-500 mt-0.5">{sectionInfo[activeSection].desc}</p>
+          </div>
+          <div className="relative w-full sm:w-auto">
+            <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-500" />
             <input
               type="text"
-              placeholder="Search user..."
-              className="w-full bg-[#12121B] border border-white/10 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#A855F7] transition"
+              placeholder="Search..."
+              className="w-full sm:w-[220px] bg-[#12121B] border border-white/[0.08] rounded-lg pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/50 transition"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
             />
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
-          {leftTab === "Pending" && pendingUsers.map(u => (
-            <div 
-              key={u.id}
-              onClick={() => { setSelectedUser(u); setSelectedMentor(null); setActiveTab("Availability"); }}
-              className={`p-3 rounded-xl border cursor-pointer transition-all ${
-                selectedUser?.id === u.id 
-                  ? 'bg-[#A855F7]/10 border-[#A855F7] shadow-sm shadow-[#A855F7]/10' 
-                  : 'bg-[#12121B]/60 border-white/5 hover:border-white/20 hover:bg-[#12121B]'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold ${selectedUser?.id === u.id ? 'bg-[#A855F7] text-white' : 'bg-[#1D1D2C] text-slate-300'}`}>
-                  {getInitials(u.name)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-semibold text-xs text-white truncate">{u.name}</h3>
-                    <span className="text-[9px] px-2 py-0.5 rounded-full bg-[#A855F7]/20 text-[#D8B4FE] font-medium whitespace-nowrap">
-                      {u.requirementType?.replace(/_/g, " ") || "Mentoring"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
-                    <p className="text-[11px] text-slate-400 truncate">{u.email}</p>
-                  </div>
-                  {u.tags && u.tags.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1.5">
-                      {u.tags.slice(0, 3).map(t => (
-                        <span key={t} className="text-[9px] px-1.5 py-0.5 rounded bg-[#161622] text-slate-400 border border-white/5">
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {u.description && (
-                    <p className="text-[10px] text-slate-500 mt-1.5 line-clamp-2 leading-tight">
-                      {u.description}
-                    </p>
-                  )}
-                </div>
-                <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
-              </div>
-            </div>
-          ))}
-          {leftTab === "Pending" && pendingUsers.length === 0 && !loading && (
-            <div className="text-center p-6 text-xs text-slate-500">No pending users found.</div>
-          )}
+        {/* Content */}
+        <div>
 
-          {leftTab === "Scheduled" && meetings.map(m => (
-            <div 
-              key={m.id}
-              className="p-3 rounded-xl bg-[#12121B]/60 border border-white/5 hover:border-white/20 transition-all"
-            >
-              <div className="flex items-start justify-between mb-2">
-                <div>
-                  <h3 className="font-semibold text-xs text-white line-clamp-1">{m.title}</h3>
-                  <p className="text-[10px] text-[#A855F7] font-medium mt-1">
-                    {new Date(m.startTime).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                  </p>
-                </div>
-                <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 font-medium whitespace-nowrap border border-emerald-800/40">
-                  Scheduled
-                </span>
-              </div>
-              <div className="space-y-1.5 mt-3 pt-3 border-t border-white/5">
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 rounded-full bg-[#1A1A2B] border border-white/10 flex items-center justify-center text-[8px] font-bold text-slate-300">
-                    {getInitials(m.user?.name || "U")}
-                  </div>
-                  <span className="text-[11px] text-slate-300 truncate">{m.user?.name || "User"}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 rounded-full bg-[#A855F7]/20 border border-[#A855F7]/30 flex items-center justify-center text-[8px] font-bold text-[#D8B4FE]">
-                    {getInitials(m.mentor?.name || "M")}
-                  </div>
-                  <span className="text-[11px] text-slate-300 truncate">{m.mentor?.name || "Mentor"}</span>
-                </div>
-              </div>
-              {m.meetLink && (
-                <div className="mt-3">
-                  <a href={m.meetLink} target="_blank" rel="noreferrer" className="block text-center w-full bg-[#A855F7]/10 hover:bg-[#A855F7]/20 text-[#D8B4FE] border border-[#A855F7]/30 text-[10px] font-medium py-1.5 rounded-lg transition">
-                    Join Meet
-                  </a>
+          {/* ─── PENDING: User Cards Grid ─── */}
+          {activeSection === "Pending" && (
+            <div>
+              {loading && (
+                <div className="flex items-center justify-center py-20">
+                  <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
                 </div>
               )}
+              {!loading && pendingUsers.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-500">
+                  <Users className="w-10 h-10 text-slate-700 mb-3" />
+                  <p className="text-sm font-medium">No pending requests</p>
+                  <p className="text-xs text-slate-600 mt-1">All users have been matched</p>
+                </div>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                {pendingUsers.map(u => (
+                  <UserCard
+                    key={u.id}
+                    person={u}
+                    onAction={openUserModal}
+                    actionText="View Details"
+                    badgeText={u.requirementType?.replace(/_/g, " ")}
+                    subBadgeText={u.wasCancelled ? "Rescheduling" : null}
+                    footerText={`Requested ${timeAgo(u.createdAt)}`}
+                  />
+                ))}
+              </div>
             </div>
-          ))}
-          {leftTab === "Scheduled" && meetings.length === 0 && !loading && (
-            <div className="text-center p-6 text-xs text-slate-500">No scheduled meetings.</div>
+          )}
+
+          {/* ─── MEETINGS VIEW (Todays / Completed / Cancelled) ─── */}
+          {["Todays", "Completed", "Cancelled"].includes(activeSection) && (
+            <div>
+              {!loading && filteredMeetingsList.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-500">
+                  <Calendar className="w-10 h-10 text-slate-700 mb-3" />
+                  <p className="text-sm font-medium">No meetings found</p>
+                  <p className="text-xs text-slate-600 mt-1">Nothing to display in this section</p>
+                </div>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                {filteredMeetingsList.map(m => {
+                  const isCancelled = m.status === "CANCELLED";
+                  const isCompleted = activeSection === "Completed" || new Date(m.endTime) < new Date();
+                  return (
+                    <div
+                      key={m.id}
+                      className={`bg-[#0E0E16] border border-white/[0.08] rounded-2xl overflow-hidden hover:border-white/[0.2] transition-all duration-300 flex flex-col justify-between group shadow-xl ${isCancelled ? "opacity-85" : ""
+                        }`}
+                    >
+                      {/* Top Section */}
+                      <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
+                        {/* Title & Status Badge */}
+                        <div className="flex items-start justify-between gap-3">
+                          <h3 className={`text-sm font-bold leading-snug line-clamp-2 ${isCancelled ? "text-slate-300" : "text-white"}`}>
+                            {m.title}
+                          </h3>
+                          {isCancelled ? (
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-red-500/15 text-red-400 shrink-0">Cancelled</span>
+                          ) : isCompleted ? (
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 shrink-0">Completed</span>
+                          ) : (
+                            <span className="text-[9px] font-bold px-2.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-300 shrink-0">Scheduled</span>
+                          )}
+                        </div>
+
+                        {/* Date & Time */}
+                        <div className="space-y-1.5 pt-1">
+                          <div className="flex items-center gap-2 text-[11px] text-slate-300 font-medium">
+                            <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                            {new Date(m.startTime).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                          </div>
+                          <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                            <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                            {new Date(m.startTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - {new Date(m.endTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        </div>
+
+                        {/* User & Mentor Flow */}
+                        <div className="pt-2 border-t border-white/[0.04] flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-7 h-7 rounded-full bg-[#1D1D2E] border border-white/[0.08] flex items-center justify-center text-[9px] font-bold text-slate-300 shrink-0">
+                              {getInitials(m.user?.name || "U")}
+                            </div>
+                            <span className="text-[11px] text-slate-300 truncate font-medium">{m.user?.name || "User"}</span>
+                          </div>
+                          <ArrowRight className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-7 h-7 rounded-full bg-[#1D1D2E] border border-white/[0.08] flex items-center justify-center text-[9px] font-bold text-slate-300 shrink-0">
+                              {getInitials(m.mentor?.name || "M")}
+                            </div>
+                            <span className="text-[11px] text-slate-300 truncate font-medium">{m.mentor?.name || "Mentor"}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Bottom Footer Bar */}
+                      <div className="bg-[#12121C] px-5 py-3 border-t border-white/[0.06] flex items-center justify-between group-hover:bg-white/[0.02] transition-colors">
+                        <span className="text-[10px] text-slate-500 font-medium">
+                          {m.callType ? m.callType.replace(/_/g, " ") : "Mentoring"}
+                        </span>
+                        {m.meetLink && !isCancelled ? (
+                          <a
+                            href={m.meetLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#1C1C28] hover:bg-[#252538] text-white text-[10px] font-bold rounded-xl border border-white/15 hover:border-white/25 transition shadow-sm"
+                          >
+                            <Video className="w-3 h-3" /> Join Meet
+                          </a>
+                        ) : m.user ? (
+                          <button
+                            onClick={() => openUserModal(m.user)}
+                            className="px-3 py-1.5 bg-[#1C1C28] hover:bg-[#252538] text-white text-[10px] font-bold rounded-xl transition border border-white/15 hover:border-white/25 flex items-center gap-1"
+                          >
+                            {isCancelled ? "Reschedule" : "View User"} <ArrowRight className="w-3 h-3" />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ─── MENTORS VIEW ─── */}
+          {activeSection === "Mentors" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+              {mentors.map(m => (
+                <UserCard
+                  key={m.id}
+                  person={m}
+                  isMentor={true}
+                  badgeText="Mentor"
+                />
+              ))}
+            </div>
+          )}
+
+          {/* ─── USERS VIEW ─── */}
+          {activeSection === "Users" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+              {users.map(u => (
+                <UserCard
+                  key={u.id}
+                  person={u}
+                  onAction={openUserModal}
+                  actionText="View Details"
+                  badgeText={null}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* ─── AVAILABILITY VIEW ─── */}
+          {activeSection === "Availability" && (
+            <div className="bg-[#0E0E16] border border-white/[0.06] rounded-2xl p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white">Team & User Schedules Matrix</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">View and manage full weekly calendars across all users and mentors</p>
+                </div>
+                <a href="/admin/schedules" className="px-4 py-2 bg-[#1C1C28] hover:bg-[#252538] text-white text-xs font-semibold rounded-xl transition border border-white/15 hover:border-white/25 shadow-md flex items-center gap-1.5">
+                  Open Team Schedules Matrix →
+                </a>
+              </div>
+            </div>
+          )}
+
+          {/* ─── REPORTS VIEW ─── */}
+          {activeSection === "Reports" && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-[#0E0E16] border border-white/[0.06] rounded-xl p-5">
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Total Sessions Booked</div>
+                <div className="text-3xl font-extrabold text-white">{meetings.length}</div>
+                <div className="text-[10px] text-emerald-400 font-medium mt-1">Across all users</div>
+              </div>
+              <div className="bg-[#0E0E16] border border-white/[0.06] rounded-xl p-5">
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Completion Rate</div>
+                <div className="text-3xl font-extrabold text-white">
+                  {meetings.length > 0 ? Math.round((completedMeetings.length / meetings.length) * 100) : 0}%
+                </div>
+                <div className="text-[10px] text-slate-400 font-medium mt-1">{completedMeetings.length} completed sessions</div>
+              </div>
+              <div className="bg-[#0E0E16] border border-white/[0.06] rounded-xl p-5">
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Active Mentor Network</div>
+                <div className="text-3xl font-extrabold text-white">{mentors.length}</div>
+                <div className="text-[10px] text-[#C084FC] font-medium mt-1">Ready for matching</div>
+              </div>
+            </div>
           )}
         </div>
       </div>
 
-      {/* MIDDLE PANEL: User Detail & Availability (~42%) */}
-      <div className="flex-1 border-r border-white/[0.08] flex flex-col bg-[#08080C]">
-        {selectedUser ? (
-          <>
-            {/* Header info */}
-            <div className="p-6 border-b border-white/[0.08]">
-              <button
-                onClick={() => setSelectedUser(null)}
-                className="flex items-center gap-1 text-xs text-slate-400 hover:text-white transition mb-4"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" /> Back to List
-              </button>
+      {/* ═══════════ MODAL OVERLAY ═══════════ */}
+      {modalOpen && selectedUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => { setModalOpen(false); setSelectedUser(null); setSelectedMentor(null); setSelectedSlot(null); }}
+          />
 
-              <div className="flex items-start justify-between">
-                <div className="flex gap-4">
-                  <div className="w-14 h-14 rounded-full bg-[#1A1A2B] border border-white/10 flex items-center justify-center text-xl font-bold text-[#C084FC]">
-                    {getInitials(selectedUser.name)}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <h2 className="text-xl font-bold text-white">{selectedUser.name}</h2>
-                      <span className="text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-[#A855F7]/20 text-[#D8B4FE] border border-[#A855F7]/30">
-                        {selectedUser.requirementType?.replace(/_/g, " ")}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400 mb-2">{selectedUser.email}</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {selectedUser.tags?.map(t => (
-                        <span key={t} className="text-[10px] px-2 py-0.5 rounded-md bg-[#161622] text-slate-300 border border-white/5">
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-[10px] text-slate-400 mb-1">Weekly Slots</div>
-                  <div className="bg-[#141420] border border-white/10 rounded-xl px-3 py-1.5 text-xs font-bold text-white">
-                    {userAvail?.exceptionCount || 0} slots
-                  </div>
-                </div>
-              </div>
-            </div>
+          {/* Modal Container */}
+          <div className="relative w-full max-w-[720px] mx-4 max-h-[85vh] bg-[#0C0C14] border border-white/[0.08] rounded-2xl shadow-2xl shadow-black/40 flex flex-col overflow-hidden">
 
-            {/* Workable Tabs Header */}
-            <div className="border-b border-white/[0.08] flex px-6 pt-2 bg-[#0A0A10]">
-              {["User Details", "Availability", "Requirements", "History"].map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`pb-3 px-4 text-xs font-semibold border-b-2 transition ${activeTab === tab
-                      ? "border-[#A855F7] text-[#C084FC]"
-                      : "border-transparent text-slate-400 hover:text-slate-200"
-                    }`}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-
-            {/* Workable Tab Body */}
-            <div className="flex-1 overflow-y-auto p-6">
-
-              {/* TAB 1: User Details */}
-              {activeTab === "User Details" && (
-                <div className="space-y-6">
-                  <div className="bg-[#12121C] border border-white/5 rounded-xl p-5 space-y-4">
-                    <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                      <User className="w-4 h-4 text-[#C084FC]" /> User Information
-                    </h3>
-                    <div className="grid grid-cols-2 gap-4 text-xs">
-                      <div>
-                        <span className="text-slate-500 block mb-1">Full Name</span>
-                        <span className="text-slate-200 font-medium">{selectedUser.name}</span>
+            {/* ─── DETAILS VIEW ─── */}
+            {modalView === "details" && (
+              <>
+                {/* Modal Header */}
+                <div className="shrink-0 p-6 pb-5 border-b border-white/[0.06]">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-start gap-4">
+                      <div className="w-14 h-14 rounded-full bg-white/10 border border-white/15 flex items-center justify-center text-lg font-bold text-white">
+                        {getInitials(selectedUser.name)}
                       </div>
                       <div>
-                        <span className="text-slate-500 block mb-1">Email Address</span>
-                        <span className="text-slate-200 font-medium">{selectedUser.email}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 block mb-1">Timezone</span>
-                        <span className="text-slate-200 font-medium">{selectedUser.timezone || "Asia/Kolkata (IST)"}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 block mb-1">Role</span>
-                        <span className="text-[#D8B4FE] font-medium">Mentee (USER)</span>
-                      </div>
-                      <div className="col-span-2 pt-2 border-t border-white/5 mt-1">
-                        <span className="text-slate-500 block mb-2">Skills & Tags</span>
-                        <div className="flex flex-wrap gap-1.5 mb-4">
-                          {selectedUser.tags && selectedUser.tags.length > 0 ? (
-                            selectedUser.tags.map(t => (
-                              <span key={t} className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-[#A855F7]/10 text-[#D8B4FE] border border-[#A855F7]/20">
-                                {t}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-slate-600 italic">No tags available.</span>
-                          )}
-                        </div>
-                        
-                        <span className="text-slate-500 block mb-2">Profile Bio / Description</span>
-                        <p className="text-xs text-slate-300 leading-relaxed bg-[#0A0A10] p-3 rounded-lg border border-white/5">
-                          {selectedUser.description || "No bio description added to profile."}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 2: Availability */}
-              {activeTab === "Availability" && (
-                <div className="space-y-6">
-                  <div className="flex items-center justify-between">
-                    {/* Pill Toggle matching image 2 */}
-                    <div className="flex bg-[#141420] border border-white/5 rounded-xl p-1">
-                      <button
-                        onClick={() => setAvailTab("Upcoming")}
-                        className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition ${availTab === "Upcoming"
-                            ? "bg-[#A855F7] text-white shadow-sm"
-                            : "text-slate-400 hover:text-white"
-                          }`}
-                      >
-                        Upcoming Availability
-                      </button>
-                      <button
-                        onClick={() => setAvailTab("All")}
-                        className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition ${availTab === "All"
-                            ? "bg-[#A855F7] text-white shadow-sm"
-                            : "text-slate-400 hover:text-white"
-                          }`}
-                      >
-                        All Availability
-                      </button>
-                    </div>
-
-                    {/* Timezone Toggle matching image 2 */}
-                    <div className="flex bg-[#141420] border border-white/5 rounded-xl p-1">
-                      <button
-                        onClick={() => setDisplayTz("IST")}
-                        className={`px-3 py-1.5 text-[11px] font-semibold rounded-lg transition ${displayTz === "IST"
-                            ? "bg-[#252538] text-white shadow-sm"
-                            : "text-slate-400 hover:text-white"
-                          }`}
-                      >
-                        IST (GMT+5:30)
-                      </button>
-                      <button
-                        onClick={() => setDisplayTz("UTC")}
-                        className={`px-3 py-1.5 text-[11px] font-semibold rounded-lg transition ${displayTz === "UTC"
-                            ? "bg-[#252538] text-white shadow-sm"
-                            : "text-slate-400 hover:text-white"
-                          }`}
-                      >
-                        GMT (GMT+0)
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Slots List */}
-                  <div className="space-y-5">
-                    {userAvail?.dates?.map(date => {
-                      const slots = userAvail.availability[date] || [];
-                      if (slots.length === 0) return null;
-                      const dateObj = new Date(date);
-                      const isToday = date === new Date().toISOString().slice(0, 10);
-                      return (
-                        <div key={date}>
-                          <h3 className="text-xs font-semibold text-slate-400 mb-2.5 flex items-center gap-2">
-                            {isToday ? "Today" : dateObj.toLocaleDateString('en-US', { weekday: 'short' })} &middot; {dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                          </h3>
-                          <div className="space-y-2">
-                            {slots.map((s, i) => (
-                              <div key={i} className="flex items-center justify-between p-3.5 rounded-xl bg-[#12121C] border border-white/5 hover:border-white/10 transition">
-                                <div className="flex items-center gap-3">
-                                  <div className="w-2 h-2 rounded-full bg-emerald-400"></div>
-                                  <div>
-                                    <div className="text-xs font-bold text-white">
-                                      {formatTime(s.startTime, displayTz)} - {formatTime(s.endTime, displayTz)} {displayTz}
-                                    </div>
-                                    <div className="text-[10px] text-slate-400">
-                                      {formatTime(s.startTime, displayTz === "IST" ? "UTC" : "IST")} - {formatTime(s.endTime, displayTz === "IST" ? "UTC" : "IST")} {displayTz === "IST" ? "GMT" : "IST"}
-                                    </div>
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-[#1C1C2C] text-slate-300">1h</span>
-                                  <ChevronRight className="w-4 h-4 text-slate-600" />
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {(!userAvail || userAvail.dates?.every(d => !userAvail.availability[d]?.length)) && (
-                      <div className="text-center py-10 text-xs text-slate-500">No availability set for this week.</div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 3: Requirements */}
-              {activeTab === "Requirements" && (
-                <div className="space-y-6">
-                  <div className="bg-[#12121C] border border-white/5 rounded-xl p-5 space-y-3">
-                    <span className="text-[10px] font-bold text-[#C084FC] uppercase tracking-wider">Step 1 - Call Type</span>
-                    <h3 className="text-sm font-semibold text-white">What do you need help with?</h3>
-                    <div className="p-3 bg-[#0A0A10] rounded-lg border border-[#A855F7]/30 text-xs text-[#D8B4FE] font-medium flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full bg-[#A855F7]"></div>
-                      {selectedUser.requirementType?.replace(/_/g, " ") || "Not selected"}
-                    </div>
-                  </div>
-
-                  <div className="bg-[#12121C] border border-white/5 rounded-xl p-5 space-y-3">
-                    <span className="text-[10px] font-bold text-[#C084FC] uppercase tracking-wider">Step 2 - Goal Description</span>
-                    <h3 className="text-sm font-semibold text-white">Requirement Description</h3>
-                    <div className="p-3 bg-[#0A0A10] rounded-lg border border-white/5 text-xs text-slate-300 leading-relaxed min-h-[80px]">
-                      {selectedUser.requirementDesc || "No specific goal description entered."}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 4: History */}
-              {activeTab === "History" && (
-                <div className="space-y-4">
-                  <h3 className="text-xs font-semibold text-slate-400 mb-2">Past & Scheduled Meetings</h3>
-                  {selectedUser.meetingsAsUser && selectedUser.meetingsAsUser.length > 0 ? (
-                    selectedUser.meetingsAsUser.map((m, i) => (
-                      <div key={i} className="p-4 rounded-xl bg-[#12121C] border border-white/5">
-                        <div className="flex items-center justify-between mb-3">
-                          <div>
-                            <div className="text-xs font-semibold text-white mb-1">Session with {m.mentor?.name || "Mentor"}</div>
-                            <div className="text-[10px] text-slate-400">
-                              {new Date(m.startTime).toLocaleString()}
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-semibold px-2 py-1 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/40">
-                            {m.status || "Scheduled"}
+                        <div className="flex items-center gap-2.5 mb-1">
+                          <h2 className="text-lg font-bold text-white">{selectedUser.name}</h2>
+                          <span className="text-[9px] font-bold px-2.5 py-0.5 rounded bg-white/10 text-white border border-white/15 uppercase tracking-wide">
+                            {selectedUser.requirementType?.replace(/_/g, " ")}
                           </span>
                         </div>
-                        {m.meetLink && (
-                          <div className="pt-3 border-t border-white/5 mt-1">
-                            <a href={m.meetLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#A855F7]/10 hover:bg-[#A855F7]/20 text-[#D8B4FE] text-[10px] font-medium rounded-lg border border-[#A855F7]/30 transition">
-                              Join Google Meet <ArrowRight className="w-3 h-3" />
-                            </a>
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-center py-10 text-xs text-slate-500 flex flex-col items-center gap-2">
-                      <History className="w-8 h-8 text-slate-700" />
-                      <p>No meeting history found for this user.</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-slate-500 flex-col gap-3">
-            <User className="w-10 h-10 text-slate-700" />
-            <p className="text-xs">Select a user to view their details and availability</p>
-          </div>
-        )}
-      </div>
-
-      {/* RIGHT PANEL: Schedule Meeting (~33%) */}
-      <div className="w-[390px] shrink-0 bg-[#0A0A10] flex flex-col">
-        {selectedUser ? (
-          <div className="p-6 flex-1 flex flex-col h-full overflow-hidden">
-            <div className="mb-5">
-              <h2 className="text-base font-bold text-white">Schedule Meeting</h2>
-              <p className="text-xs text-slate-400">Match {selectedUser.name} with a mentor</p>
-            </div>
-
-            <div className="flex-1 overflow-y-auto space-y-6 pr-1">
-
-              {/* Step 1: Select Mentor */}
-              <div>
-                <div className="flex items-center gap-2 mb-3">
-                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${selectedMentor ? "bg-emerald-500 text-white" : "bg-[#1C1C2C] text-[#C084FC]"}`}>
-                    {selectedMentor ? <Check className="w-3 h-3" /> : "1"}
-                  </div>
-                  <h3 className="text-xs font-semibold text-white">Select Mentor</h3>
-                </div>
-
-                {selectedMentor ? (
-                  <div className="p-3.5 rounded-xl border border-[#A855F7]/30 bg-[#A855F7]/10 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-[#1A1A2B] flex items-center justify-center text-xs font-bold text-[#C084FC]">
-                        {getInitials(selectedMentor.name)}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-semibold text-xs text-white">{selectedMentor.name}</h4>
-                          <span className="text-[10px] text-amber-400 font-semibold">★ 4.8</span>
+                        <p className="text-xs text-slate-400 mb-2">{selectedUser.email}</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {selectedUser.tags?.map(t => (
+                            <span key={t} className="text-[9px] font-medium px-2 py-0.5 rounded-md bg-[#161622] text-slate-300 border border-white/[0.06]">{t}</span>
+                          ))}
                         </div>
-                        <p className="text-[10px] text-slate-400 truncate max-w-[140px]">{selectedMentor.tags?.slice(0, 2).join(" · ")}</p>
                       </div>
                     </div>
                     <button
-                      onClick={() => { setSelectedMentor(null); setSelectedSlot(null); }}
-                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg border border-white/10 hover:bg-white/5 transition"
+                      onClick={() => { setModalOpen(false); setSelectedUser(null); }}
+                      className="w-8 h-8 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] flex items-center justify-center transition"
                     >
-                      Change
+                      <X className="w-4 h-4 text-slate-400" />
                     </button>
                   </div>
-                ) : aiLoadingState > 0 ? (
-                  <div className="p-4 bg-[#12121C] rounded-xl border border-white/5 space-y-3">
-                    <div className="text-xs font-semibold text-[#D8B4FE] flex items-center gap-2 mb-3">
-                      <Sparkles className="w-4 h-4 text-[#A855F7] animate-pulse" /> AI evaluating mentor profiles...
-                    </div>
-                    <div className="space-y-2 text-[11px] text-slate-400 font-medium">
-                      <div className={aiLoadingState >= 1 ? "text-slate-200" : "opacity-30"}>{aiLoadingState >= 1 ? "✓" : "○"} Reading user requirements...</div>
-                      <div className={aiLoadingState >= 2 ? "text-slate-200" : "opacity-30"}>{aiLoadingState >= 2 ? "✓" : "○"} Comparing mentor expertise...</div>
-                      <div className={aiLoadingState >= 3 ? "text-slate-200" : "opacity-30"}>{aiLoadingState >= 3 ? "✓" : "○"} Matching skills and experience...</div>
-                      <div className={aiLoadingState >= 4 ? "text-slate-200" : "opacity-30"}>{aiLoadingState >= 4 ? "✓" : "○"} Checking domain fit...</div>
-                      <div className={aiLoadingState >= 5 ? "text-slate-200" : "opacity-30"}>{aiLoadingState >= 5 ? "✓" : "○"} Ranking best mentors...</div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-5">
-                    {aiRecommendations.length > 0 && (
-                      <div>
-                        <h4 className="text-[10px] font-bold text-[#C084FC] uppercase tracking-wider mb-2.5">AI Recommended Mentors</h4>
-                        <div className="space-y-2.5">
-                          {aiRecommendations.map((rec, idx) => {
-                            const m = aiFallbackMentors.find(x => x.id === rec.mentorId) || mentors.find(x => x.id === rec.mentorId);
-                            if (!m) return null;
-                            return (
-                              <div key={rec.mentorId} onClick={() => setSelectedMentor(m)} className="p-3.5 rounded-xl border border-[#A855F7]/30 bg-[#A855F7]/10 hover:bg-[#A855F7]/20 cursor-pointer transition group relative overflow-hidden">
-                                <div className="absolute top-0 right-0 bg-[#A855F7] text-white text-[9px] font-bold px-2 py-0.5 rounded-bl-lg">
-                                  {idx === 0 ? "🥇" : idx === 1 ? "🥈" : "🥉"} {rec.score}% Match
-                                </div>
-                                <div className="flex items-center gap-3 mb-2.5">
-                                  <div className="w-9 h-9 rounded-full bg-[#1A1A2B] flex items-center justify-center text-xs font-bold text-[#C084FC]">
-                                    {getInitials(m.name)}
-                                  </div>
-                                  <div>
-                                    <h4 className="font-semibold text-xs text-white">{m.name}</h4>
-                                    <p className="text-[10px] text-slate-400 mb-0.5">{m.tags?.slice(0, 3).join(" · ")}</p>
-                                    {mentorOverlaps[rec.mentorId] && (
-                                      <div className={`text-[10px] font-medium ${mentorOverlaps[rec.mentorId].includes("✅") ? "text-emerald-400" : "text-rose-400"}`}>
-                                        Availability: {mentorOverlaps[rec.mentorId]}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="bg-[#0A0A10]/60 rounded-lg p-2.5 border border-white/5">
-                                  <div className="text-[9px] text-[#C084FC] mb-1 font-bold uppercase">Why?</div>
-                                  <ul className="text-[11px] text-slate-300 space-y-0.5">
-                                    {rec.reason.map((r, i) => (
-                                      <li key={i} className="flex items-start gap-1">
-                                        <span className="text-emerald-400">✓</span> <span className="leading-tight">{r}</span>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    <div>
-                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2.5">
-                        {aiRecommendations.length > 0 ? "All Available Mentors" : "Closest Available Mentors"}
-                      </h4>
-                      <div className="space-y-2">
-                        {recommendedMentors.slice(0, 5).map(m => (
-                          <div
-                            key={m.id}
-                            onClick={() => setSelectedMentor(m)}
-                            className="p-3 rounded-xl border border-white/5 bg-[#12121C] hover:border-[#A855F7]/50 hover:bg-[#A855F7]/10 cursor-pointer transition flex items-center justify-between group"
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-8 h-8 rounded-full bg-[#1D1D2C] flex items-center justify-center text-xs font-bold text-slate-300">
-                                {getInitials(m.name)}
-                              </div>
-                              <div>
-                                <h4 className="font-medium text-xs text-slate-200 group-hover:text-white">{m.name}</h4>
-                                <p className="text-[10px] text-slate-500">{m.tags?.slice(0, 2).join(", ")}</p>
-                                {mentorOverlaps[m.id] && (
-                                  <div className={`text-[9px] font-medium mt-0.5 ${mentorOverlaps[m.id].includes("✅") ? "text-emerald-400" : "text-rose-400"}`}>
-                                    Availability: {mentorOverlaps[m.id]}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                            <div className="text-[10px] font-semibold px-2 py-1 rounded bg-[#A855F7]/20 text-[#D8B4FE] opacity-0 group-hover:opacity-100 transition">
-                              Select
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Step 2: Select Time Slot */}
-              <div className={`transition-opacity ${selectedMentor ? "opacity-100" : "opacity-30 pointer-events-none"}`}>
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-5 h-5 rounded-full bg-[#1C1C2C] text-[#C084FC] flex items-center justify-center text-[10px] font-bold">2</div>
-                  <h3 className="text-xs font-semibold text-white">Select Overlapping Time Slot</h3>
                 </div>
 
-                {selectedMentor && (
-                  <div className="bg-[#12121C] rounded-xl border border-white/5 p-3.5 space-y-3">
-                    <div className="mb-2">
-                      <h4 className="text-xs font-semibold text-slate-200">Common Free Times</h4>
-                      <p className="text-[10px] text-slate-400">Intersection of user & mentor availability</p>
-                    </div>
+                {/* Modal Body */}
+                <div className="flex-1 overflow-y-auto p-6 space-y-5">
 
-                    {Object.keys(groupedOverlaps).length > 0 ? (
-                      <div className="space-y-3">
-                        {Object.entries(groupedOverlaps).map(([date, slots]) => {
+                  {/* Description */}
+                  {selectedUser.description && (
+                    <div className="bg-[#111118] border border-white/[0.05] rounded-xl p-4">
+                      <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">About</div>
+                      <p className="text-xs text-slate-300 leading-relaxed">{selectedUser.description}</p>
+                    </div>
+                  )}
+
+                  {/* Requirement */}
+                  <div className="bg-[#111118] border border-white/[0.05] rounded-xl p-4">
+                    <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Requirement</div>
+                    <div className="text-sm font-semibold text-white mb-1">{selectedUser.requirementType?.replace(/_/g, " ") || "Not specified"}</div>
+                    <p className="text-xs text-slate-400 leading-relaxed">{selectedUser.requirementDesc || "No specific description provided."}</p>
+                  </div>
+
+                  {/* User Info Grid */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-[#111118] border border-white/[0.05] rounded-xl p-4">
+                      <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Timezone</div>
+                      <div className="text-xs font-medium text-slate-200">{selectedUser.timezone || "Asia/Kolkata (IST)"}</div>
+                    </div>
+                    <div className="bg-[#111118] border border-white/[0.05] rounded-xl p-4">
+                      <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Weekly Slots</div>
+                      <div className="text-xs font-medium text-slate-200">{userAvail?.exceptionCount || 0} available</div>
+                    </div>
+                  </div>
+
+                  {/* Availability Preview */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Availability This Week</div>
+                      <div className="flex bg-[#0A0A10] border border-white/10 rounded-lg p-0.5">
+                        <button onClick={() => setDisplayTz("IST")} className={`px-2.5 py-1 text-[9px] font-semibold rounded transition ${displayTz === "IST" ? "bg-[#1C1C28] text-white border border-white/10" : "text-slate-400"}`}>IST</button>
+                        <button onClick={() => setDisplayTz("UTC")} className={`px-2.5 py-1 text-[9px] font-semibold rounded transition ${displayTz === "UTC" ? "bg-[#1C1C28] text-white border border-white/10" : "text-slate-400"}`}>UTC</button>
+                      </div>
+                    </div>
+                    <div className="space-y-4">
+                      {/* Current & Future Availability */}
+                      <div className="space-y-2">
+                        {userAvail?.dates?.filter(d => categorizedUserAvail.future[d]).map(date => {
+                          const slots = categorizedUserAvail.future[date];
                           const dateObj = new Date(date);
                           const isToday = date === new Date().toISOString().slice(0, 10);
                           return (
-                            <div key={date}>
-                              <div className="text-[11px] font-semibold text-slate-300 mb-1.5 border-b border-white/5 pb-1">
-                                {isToday ? "Today" : dateObj.toLocaleDateString('en-US', { weekday: 'short' })}, {dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                            <div key={date} className="bg-[#111118] border border-emerald-500/10 rounded-xl p-3.5">
+                              <div className="text-[10px] font-bold text-emerald-500/70 mb-2">
+                                {isToday ? "Today" : dateObj.toLocaleDateString('en-US', { weekday: 'short' })} · {dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                               </div>
-                              <div className="space-y-1.5">
-                                {slots.map((s, i) => {
-                                  const isSelected = selectedSlot?.startTime === s.startTime;
-                                  return (
-                                    <label
-                                      key={i}
-                                      className={`flex items-center justify-between p-2.5 rounded-lg border cursor-pointer transition ${isSelected
-                                          ? "bg-[#A855F7]/20 border-[#A855F7]"
-                                          : "bg-[#0A0A10] border-white/5 hover:border-white/20"
-                                        }`}
-                                    >
-                                      <div className="flex items-center gap-2.5">
-                                        <div className="w-1 h-8 rounded-full bg-[#A855F7]"></div>
-                                        <div>
-                                          <div className="text-xs font-semibold text-white">
-                                            {formatTime(s.startTime, displayTz)} - {formatTime(s.endTime, displayTz)} {displayTz}
-                                          </div>
-                                          <div className="text-[10px] text-slate-400">
-                                            {formatTime(s.startTime, displayTz === "IST" ? "UTC" : "IST")} - {formatTime(s.endTime, displayTz === "IST" ? "UTC" : "IST")} {displayTz === "IST" ? "GMT" : "IST"}
-                                          </div>
-                                        </div>
-                                      </div>
-                                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${isSelected ? "border-[#A855F7] bg-[#A855F7]" : "border-slate-600"}`}>
-                                        {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
-                                      </div>
-                                      <input
-                                        type="radio"
-                                        name="slot"
-                                        className="sr-only"
-                                        onChange={() => setSelectedSlot(s)}
-                                        checked={isSelected}
-                                      />
-                                    </label>
-                                  );
-                                })}
+                              <div className="flex flex-wrap gap-2">
+                                {slots.map((s, i) => (
+                                  <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0A0A10] border border-emerald-500/20">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
+                                    <span className="text-[10px] font-semibold text-white">
+                                      {formatTime(s.startTime, displayTz)} - {formatTime(s.endTime, displayTz)} {displayTz}
+                                    </span>
+                                  </div>
+                                ))}
                               </div>
                             </div>
                           );
                         })}
+                        {Object.keys(categorizedUserAvail.future).length === 0 && (
+                          <div className="text-center py-4 text-xs text-slate-600 border border-dashed border-white/10 rounded-xl">No upcoming availability this week.</div>
+                        )}
+                      </div>
+
+                      {/* Past Availability */}
+                      {Object.keys(categorizedUserAvail.past).length > 0 && (
+                        <div className="space-y-2">
+                          <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-2 mt-4">Past Availability</div>
+                          {userAvail?.dates?.filter(d => categorizedUserAvail.past[d]).map(date => {
+                            const slots = categorizedUserAvail.past[date];
+                            const dateObj = new Date(date);
+                            const isToday = date === new Date().toISOString().slice(0, 10);
+                            return (
+                              <div key={date} className="bg-[#111118]/50 border border-white/[0.02] rounded-xl p-3.5">
+                                <div className="text-[10px] font-bold text-slate-500 mb-2">
+                                  {isToday ? "Today" : dateObj.toLocaleDateString('en-US', { weekday: 'short' })} · {dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  {slots.map((s, i) => (
+                                    <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0A0A10] border border-white/[0.05] opacity-60">
+                                      <div className="w-1 h-1 rounded-full bg-slate-600"></div>
+                                      <span className="text-[10px] font-semibold text-slate-400">
+                                        {formatTime(s.startTime, displayTz)} - {formatTime(s.endTime, displayTz)} {displayTz}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* History */}
+                  {selectedUser.meetingsAsUser && selectedUser.meetingsAsUser.length > 0 && (
+                    <div>
+                      <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-3">Meeting History</div>
+                      <div className="space-y-2">
+                        {selectedUser.meetingsAsUser.map((m, i) => {
+                          const isCancelled = m.status === "CANCELLED";
+                          const isPast = new Date(m.endTime) < new Date();
+                          const statusLabel = isCancelled ? "Cancelled" : isPast ? "Completed" : "Scheduled";
+                          const statusClass = isCancelled ? "bg-red-500/15 text-red-400" : isPast ? "bg-blue-500/15 text-blue-400" : "bg-emerald-500/15 text-emerald-400";
+                          return (
+                            <div key={i} className={`p-3.5 rounded-xl bg-[#111118] border border-white/[0.05] flex items-center justify-between ${isCancelled ? "opacity-60" : ""}`}>
+                              <div>
+                                <div className={`text-xs font-semibold ${isCancelled ? "text-slate-400 line-through" : "text-white"}`}>Session with {m.mentor?.name || "Mentor"}</div>
+                                <div className="text-[10px] text-slate-500 mt-0.5">{new Date(m.startTime).toLocaleString()}</div>
+                              </div>
+                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${statusClass}`}>{statusLabel}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal Footer — Schedule CTA */}
+                <div className="shrink-0 p-5 border-t border-white/[0.06] bg-[#0A0A10]">
+                  <button
+                    onClick={openScheduleView}
+                    className="w-full bg-[#1C1C28] hover:bg-[#252538] text-white font-bold py-3 rounded-xl border border-white/15 hover:border-white/25 shadow-md transition flex items-center justify-center gap-2 text-sm"
+                  >
+                    Schedule Meeting
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* ─── SCHEDULE VIEW ─── */}
+            {modalView === "schedule" && (
+              <>
+                {/* Schedule Header */}
+                <div className="shrink-0 p-6 pb-4 border-b border-white/[0.06]">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => { setModalView("details"); setSelectedMentor(null); setSelectedSlot(null); }} className="w-8 h-8 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] flex items-center justify-center transition">
+                        <ChevronLeft className="w-4 h-4 text-slate-400" />
+                      </button>
+                      <div>
+                        <h2 className="text-base font-bold text-white">Schedule Meeting</h2>
+                        <p className="text-[11px] text-slate-400">Match {selectedUser.name} with a mentor</p>
+                      </div>
+                    </div>
+                    <button onClick={() => { setModalOpen(false); setSelectedUser(null); setSelectedMentor(null); setSelectedSlot(null); }} className="w-8 h-8 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] flex items-center justify-center transition">
+                      <X className="w-4 h-4 text-slate-400" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Schedule Body */}
+                <div className="flex-1 overflow-y-auto p-6 space-y-5">
+
+                  {/* Step 1: Mentor Selection */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${selectedMentor ? "bg-emerald-500 text-white" : "bg-white/10 text-white border border-white/15"}`}>
+                        {selectedMentor ? <Check className="w-3 h-3" /> : "1"}
+                      </div>
+                      <h3 className="text-sm font-semibold text-white">Select Mentor</h3>
+                    </div>
+
+                    {selectedMentor ? (
+                      <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-sm font-bold text-emerald-300">
+                            {getInitials(selectedMentor.name)}
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-sm text-white">{selectedMentor.name}</h4>
+                            <p className="text-[10px] text-slate-400">{selectedMentor.tags?.slice(0, 3).join(" · ")}</p>
+                          </div>
+                        </div>
+                        <button onClick={() => { setSelectedMentor(null); setSelectedSlot(null); }} className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-white/10 hover:bg-white/5 transition text-slate-300">
+                          Change
+                        </button>
                       </div>
                     ) : (
-                      <div className="text-center py-6 text-xs text-slate-500">
-                        {mentorAvail ? "No overlapping slots found." : "Loading mentor availability..."}
+                      <div className="space-y-4">
+
+                        {/* Part A: AI Recommendations */}
+                        <div>
+                          <h4 className="text-[10px] font-bold text-amber-300 uppercase tracking-wider mb-2.5">AI Recommended Mentors</h4>
+                          {aiLoadingState > 0 ? (
+                            <div className="p-5 bg-[#111118] rounded-xl border border-white/[0.05] flex items-center gap-3">
+                              <div className="w-5 h-5 border-2 border-amber-300/30 border-t-amber-300 rounded-full animate-spin shrink-0"></div>
+                              <div>
+                                <div className="text-sm font-medium text-white">AI is finding the best match...</div>
+                                <div className="text-[11px] text-slate-400">Analyzing skills & expertise for {selectedUser.name}</div>
+                              </div>
+                            </div>
+                          ) : aiRecommendations.length > 0 ? (
+                            <div className="space-y-2.5">
+                              {aiRecommendations.map((rec, idx) => {
+                                const m = aiFallbackMentors.find(x => x.id === rec.mentorId) || mentors.find(x => x.id === rec.mentorId);
+                                if (!m) return null;
+                                const hasOverlap = mentorOverlaps[rec.mentorId]?.startsWith("✅");
+                                return (
+                                  <div key={rec.mentorId} onClick={() => setSelectedMentor(m)} className={`p-4 rounded-xl border cursor-pointer transition relative overflow-hidden ${hasOverlap ? "border-emerald-500/20 bg-emerald-500/[0.04] hover:bg-emerald-500/[0.08]" : "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"}`}>
+                                    <div className="absolute top-0 right-0 bg-white/10 text-white border border-white/15 text-[9px] font-bold px-3 py-1 rounded-bl-xl flex items-center gap-1">
+                                      <span>{idx === 0 ? "🥇" : idx === 1 ? "🥈" : "🥉"}</span>
+                                      <span>{rec.score}% Match</span>
+                                    </div>
+                                    <div className="flex items-center gap-3 mb-3">
+                                      <div className="w-10 h-10 rounded-full bg-white/10 border border-white/15 flex items-center justify-center text-sm font-bold text-white">
+                                        {getInitials(m.name)}
+                                      </div>
+                                      <div>
+                                        <h4 className="font-semibold text-sm text-white">{m.name}</h4>
+                                        <p className="text-[10px] text-slate-400">{m.tags?.slice(0, 3).join(" · ")}</p>
+                                        {mentorOverlaps[rec.mentorId] ? (
+                                          <div className={`text-[10px] font-medium mt-0.5 ${hasOverlap ? "text-emerald-400" : "text-rose-400"}`}>
+                                            {mentorOverlaps[rec.mentorId]}
+                                          </div>
+                                        ) : (
+                                          <div className="text-[10px] text-slate-500 mt-0.5">Checking availability...</div>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="bg-[#0A0A10]/60 rounded-lg p-3 border border-white/[0.04]">
+                                      <div className="text-[9px] text-slate-400 mb-1.5 font-bold uppercase tracking-wider">Why this mentor?</div>
+                                      <ul className="text-[11px] text-slate-300 space-y-1">
+                                        {rec.reason.map((r, i) => (
+                                          <li key={i} className="flex items-start gap-1.5">
+                                            <span className="text-emerald-400 shrink-0">✓</span>
+                                            <span className="leading-tight">{r}</span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="p-4 text-center text-[11px] text-slate-500 bg-white/[0.02] rounded-xl border border-white/[0.05]">
+                              No AI recommendations available.
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Part B: Available Mentors (with overlap) */}
+                        <div>
+                          <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2.5">Available Mentors (With Overlap)</h4>
+                          {Object.keys(mentorOverlaps).length === 0 ? (
+                            <div className="p-4 bg-[#111118] rounded-xl border border-white/[0.05] flex items-center gap-3">
+                              <div className="w-4 h-4 border-2 border-slate-500/30 border-t-slate-400 rounded-full animate-spin shrink-0"></div>
+                              <span className="text-[11px] text-slate-400">Checking mentor availability...</span>
+                            </div>
+                          ) : availableMentors.length > 0 ? (
+                            <div className="space-y-1.5">
+                              {availableMentors.map(m => (
+                                <div
+                                  key={m.id}
+                                  onClick={() => setSelectedMentor(m)}
+                                  className="p-3.5 rounded-xl border border-white/[0.05] bg-[#111118] hover:border-emerald-500/20 hover:bg-emerald-500/[0.04] cursor-pointer transition flex items-center justify-between group"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-[10px] font-bold text-emerald-300">
+                                      {getInitials(m.name)}
+                                    </div>
+                                    <div>
+                                      <h4 className="font-medium text-xs text-slate-200 group-hover:text-white transition">{m.name}</h4>
+                                      <p className="text-[9px] text-slate-500">{m.tags?.slice(0, 2).join(", ")}</p>
+                                      <div className="text-[9px] font-medium text-emerald-400">
+                                        {mentorOverlaps[m.id]}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="text-[9px] font-semibold px-2.5 py-1 rounded-lg bg-white/10 text-white border border-white/15 opacity-0 group-hover:opacity-100 transition">
+                                    Select
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="p-4 text-center text-[11px] text-slate-500 bg-white/[0.02] rounded-xl border border-white/[0.05]">
+                              No mentors have overlapping availability this week.
+                            </div>
+                          )}
+                        </div>
+
                       </div>
                     )}
                   </div>
-                )}
-              </div>
-            </div>
 
-            {/* Step 3: Confirm */}
-            <div className={`mt-3 pt-3 border-t border-white/[0.08] transition-opacity ${selectedSlot ? "opacity-100" : "opacity-30 pointer-events-none"}`}>
-              <button
-                onClick={handleBookMeeting}
-                disabled={bookingLoading || !selectedSlot}
-                className="w-full bg-[#A855F7] hover:bg-[#9333EA] text-white font-semibold py-3 rounded-xl shadow-lg shadow-[#A855F7]/20 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-xs"
-              >
-                {bookingLoading ? "Booking..." : "Confirm & Book Meeting"} <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
+                  {/* Step 2: Time Slot */}
+                  <div className={`transition-opacity ${selectedMentor ? "opacity-100" : "opacity-30 pointer-events-none"}`}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${selectedSlot ? "bg-emerald-500 text-white" : "bg-white/10 text-white border border-white/15"}`}>
+                        {selectedSlot ? <Check className="w-3 h-3" /> : "2"}
+                      </div>
+                      <h3 className="text-sm font-semibold text-white">Select Overlapping Time Slot</h3>
+                    </div>
+
+                    {selectedMentor && (
+                      <div className="bg-[#111118] rounded-xl border border-white/[0.05] p-4 space-y-3">
+                        <div>
+                          <h4 className="text-xs font-semibold text-slate-200">Common Free Times</h4>
+                          <p className="text-[10px] text-slate-500">Intersection of user & mentor availability</p>
+                        </div>
+
+                        {Object.keys(groupedOverlaps).length > 0 ? (
+                          <div className="space-y-3">
+                            {Object.entries(groupedOverlaps).map(([date, slots]) => {
+                              const dateObj = new Date(date);
+                              const isToday = date === new Date().toISOString().slice(0, 10);
+                              return (
+                                <div key={date}>
+                                  <div className="text-[10px] font-semibold text-slate-300 mb-1.5 border-b border-white/[0.04] pb-1">
+                                    {isToday ? "Today" : dateObj.toLocaleDateString('en-US', { weekday: 'short' })}, {dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    {slots.map((s, i) => {
+                                      const isSelected = selectedSlot?.startTime === s.startTime;
+                                      return (
+                                        <label key={i} className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition ${isSelected ? "bg-white/[0.08] border-white/30" : "bg-[#0A0A10] border-white/[0.05] hover:border-white/[0.15]"}`}>
+                                          <div className="flex items-center gap-2.5">
+                                            <div className="w-1 h-7 rounded-full bg-white"></div>
+                                            <div>
+                                              <div className="text-[11px] font-semibold text-white">
+                                                {formatTime(s.startTime, displayTz)} - {formatTime(s.endTime, displayTz)} {displayTz}
+                                              </div>
+                                              <div className="text-[9px] text-slate-500">
+                                                {formatTime(s.startTime, displayTz === "IST" ? "UTC" : "IST")} - {formatTime(s.endTime, displayTz === "IST" ? "UTC" : "IST")} {displayTz === "IST" ? "GMT" : "IST"}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${isSelected ? "border-white bg-white text-black" : "border-slate-600"}`}>
+                                            {isSelected && <Check className="w-2.5 h-2.5 text-black" />}
+                                          </div>
+                                          <input type="radio" name="slot" className="sr-only" onChange={() => setSelectedSlot(s)} checked={isSelected} />
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-center py-6 text-xs text-slate-500">
+                            {mentorAvail ? "No overlapping slots found." : "Loading mentor availability..."}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Schedule Footer — Book */}
+                <div className="shrink-0 p-5 border-t border-white/[0.06] bg-[#0A0A10]">
+                  <button
+                    onClick={handleBookMeeting}
+                    disabled={bookingLoading || !selectedSlot || !selectedMentor}
+                    className="w-full bg-[#1C1C28] hover:bg-[#252538] text-white font-bold py-3 rounded-xl border border-white/15 hover:border-white/25 shadow-md transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-sm"
+                  >
+                    {bookingLoading ? (
+                      <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Booking...</>
+                    ) : (
+                      <><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Confirm & Book Meeting</>
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
-        ) : (
-          <div className="flex-1 flex items-center justify-center p-6 text-center text-slate-500 text-xs">
-            <p>Select a user to begin scheduling.</p>
-          </div>
-        )}
-      </div>
-    </div>
+        </div>
+      )}
     </div>
   );
 }

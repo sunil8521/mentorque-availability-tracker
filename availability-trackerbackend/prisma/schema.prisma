@@ -30,6 +30,18 @@ enum CallType {
   MOCK_INTERVIEW_SYSTEM_DESIGN
 }
 
+enum MeetingStatus {
+  SCHEDULED
+  CANCELLED
+}
+
+enum RequestStatus {
+  PENDING
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
 model User {
   id                 String   @id @default(uuid())
   name               String
@@ -41,8 +53,6 @@ model User {
   tags               String[] @default([])
   googleRefreshToken String?  @map("google_refresh_token")
   createdAt          DateTime @default(now()) @map("created_at")
-  requirementType    CallType?
-  requirementDesc    String?  @db.Text
 
   availabilityAsUser      Availability[]          @relation("UserAvailability")
   availabilityAsMentor    Availability[]          @relation("MentorAvailability")
@@ -55,6 +65,22 @@ model User {
   meetingsAsAdmin         Meeting[]               @relation("AdminMeetings")
   meetingsAsUser          Meeting[]               @relation("UserMeetings")
   meetingsAsMentor        Meeting[]               @relation("MentorMeetings")
+  requests                MentoringRequest[]      @relation("UserRequests")
+}
+
+model MentoringRequest {
+  id              String        @id @default(uuid())
+  userId          String        @map("user_id")
+  requirementType CallType      @map("requirement_type")
+  requirementDesc String?       @db.Text @map("requirement_desc")
+  status          RequestStatus @default(PENDING)
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  user            User          @relation("UserRequests", fields: [userId], references: [id], onDelete: Cascade)
+  meetings        Meeting[]     @relation("RequestMeetings")
+
+  @@map("mentoring_requests")
 }
 
 model Availability {
@@ -138,6 +164,7 @@ model Meeting {
   adminId         String    @map("admin_id")
   title           String
   callType        CallType? @map("call_type")
+  requestId       String?   @map("request_id")
   bookedUserId    String?   @map("booked_user_id")
   bookedMentorId  String?   @map("booked_mentor_id")
   startTime       DateTime  @map("start_time")
@@ -147,11 +174,15 @@ model Meeting {
   meetLink        String?   @map("meet_link")
   calendarEventId String?   @map("calendar_event_id")
   googleEventId   String?   @map("google_event_id")
+  status          MeetingStatus @default(SCHEDULED)
+  cancelledBy     String?   @map("cancelled_by")
+  cancelledAt     DateTime? @map("cancelled_at")
   createdAt       DateTime  @default(now()) @map("created_at")
 
   admin        User                 @relation("AdminMeetings", fields: [adminId], references: [id], onDelete: Cascade)
   user         User?                @relation("UserMeetings", fields: [bookedUserId], references: [id], onDelete: SetNull)
   mentor       User?                @relation("MentorMeetings", fields: [bookedMentorId], references: [id], onDelete: SetNull)
+  request      MentoringRequest?    @relation("RequestMeetings", fields: [requestId], references: [id], onDelete: SetNull)
   participants MeetingParticipant[]
 }
 

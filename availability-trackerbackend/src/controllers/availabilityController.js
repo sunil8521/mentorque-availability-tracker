@@ -28,18 +28,6 @@ export async function getWeekly(req, res, next) {
     }
 
     const result = await loadWeeklyAvailability(owner, weekStart, scope);
-    
-    // Fetch user requirements
-    const user = await prisma.user.findUnique({
-      where: { id: owner.userId || owner.mentorId },
-      select: { requirementType: true, requirementDesc: true }
-    });
-    
-    if (user) {
-      result.requirementType = user.requirementType;
-      result.requirementDesc = user.requirementDesc;
-    }
-
     res.json(result);
   } catch (e) {
     next(e);
@@ -88,16 +76,6 @@ export async function saveBatch(req, res, next) {
     }
     if (!canAccessOwner(callerId, role, owner)) {
       return res.status(403).json({ error: "Cannot modify another user's availability" });
-    }
-
-    if (req.body.requirementType !== undefined || req.body.requirementDesc !== undefined) {
-      await prisma.user.update({
-        where: { id: owner.userId || owner.mentorId },
-        data: {
-          ...(req.body.requirementType !== undefined && { requirementType: req.body.requirementType }),
-          ...(req.body.requirementDesc !== undefined && { requirementDesc: req.body.requirementDesc }),
-        }
-      });
     }
 
     if (scope === "template") {

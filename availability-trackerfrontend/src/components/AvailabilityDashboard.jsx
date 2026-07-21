@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
-import * as availabilityApi from "../api/availability";
-import * as adminApi from "../api/admin";
+import * as availabilityApi from "../api/availability.js";
+import * as adminApi from "../api/admin.js";
+import { cancelMeeting } from "../api/meetings.js";
+import { createRequest } from "../api/requests.js";
 import {
   getViewWeekDates,
   formatDateLocal,
@@ -12,6 +14,7 @@ import {
   fmtBlockLabel,
 } from "../utils/time";
 import UpcomingSchedule from "./dashboard/UpcomingSchedule";
+import { X, Trash2, CalendarX2 } from "lucide-react";
 
 /* ──────────── constants ──────────── */
 
@@ -69,17 +72,13 @@ function groupConsecutive(blocks) {
   if (!blocks.length) return [];
   const sorted = [...blocks].sort((a, b) => a.localHour - b.localHour);
   const groups = [];
-  let cur = { startHour: sorted[0].localHour, endHour: sorted[0].localHour + 1, blocks: [sorted[0]] };
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i].localHour === cur.endHour) {
-      cur.endHour = sorted[i].localHour + 1;
-      cur.blocks.push(sorted[i]);
-    } else {
-      groups.push(cur);
-      cur = { startHour: sorted[i].localHour, endHour: sorted[i].localHour + 1, blocks: [sorted[i]] };
-    }
+  for (let i = 0; i < sorted.length; i++) {
+    groups.push({
+      startHour: sorted[i].localHour,
+      endHour: sorted[i].localHour + 1,
+      blocks: [sorted[i]]
+    });
   }
-  groups.push(cur);
   return groups;
 }
 
@@ -125,6 +124,10 @@ export default function AvailabilityDashboard({
   const [toggles, setToggles] = useState({});
   const [activeTimePicker, setActiveTimePicker] = useState(null);
 
+  // Popup state
+  const [selectedSlotDetails, setSelectedSlotDetails] = useState(null);
+  const [slotActionLoading, setSlotActionLoading] = useState(false);
+
   /* ── derived grid dates ── */
   const gridDates = useMemo(() => getViewWeekDates(weekOffset), [weekOffset]);
   const gridStart = gridDates[0];
@@ -154,14 +157,25 @@ export default function AvailabilityDashboard({
       const params = { weekStart: weekDates[0], scope: viewMode };
       if (viewAs?.userId) params.userId = viewAs.userId;
       if (viewAs?.mentorId) params.mentorId = viewAs.mentorId;
-      
-      const [res, mtgs] = await Promise.all([
+
+      const [res, mtgs, requests] = await Promise.all([
         availabilityApi.getWeekly(params),
-        adminApi.listMeetings().then(res => res.data || res).catch(() => [])
+        adminApi.listMeetings().then(res => res.data || res).catch(() => []),
+        (user.role === "USER" && !viewAs) ? import("../api/requests.js").then(m => m.getMyRequests()).then(r => r.data || r).catch(() => []) : Promise.resolve([])
       ]);
-      
+
       setData(res);
       setMeetings(mtgs || []);
+
+      if (requests && requests.length > 0) {
+        // Find the active request (PENDING or SCHEDULED)
+        const activeReq = requests.find(r => r.status === "PENDING" || r.status === "SCHEDULED");
+        if (activeReq) {
+          setRequirementType(activeReq.requirementType || "");
+          setRequirementDesc(activeReq.requirementDesc || "");
+        }
+      }
+
       setToggles({});
     } catch (e) {
       setError(e.message || "Failed to load availability");
@@ -211,6 +225,27 @@ export default function AvailabilityDashboard({
     return isSlotInPast(dateStr, hour, nowMs);
   };
 
+  // Popup action handlers
+  const handleSlotCancelMeeting = async (meetingId) => {
+    if (!meetingId) return;
+    setSlotActionLoading(true);
+    try {
+      await cancelMeeting(meetingId);
+      await fetchWeekly();
+      setSelectedSlotDetails(null);
+    } catch (e) {
+      alert("Failed to cancel meeting: " + (e.message || "Unknown error"));
+    } finally {
+      setSlotActionLoading(false);
+    }
+  };
+
+  const handleSlotDeleteAvailability = () => {
+    if (!selectedSlotDetails || readOnly) return;
+    removeBlockGroup(selectedSlotDetails.dateStr, selectedSlotDetails.group.blocks.map(b => b.utcHour));
+    setSelectedSlotDetails(null);
+  };
+
   /* ── build save payload ── */
   const buildWeekChanges = () =>
     Object.entries(toggles).map(([key, enabled]) => {
@@ -240,7 +275,7 @@ export default function AvailabilityDashboard({
     try {
       const currentToggles = overrideToggles || toggles;
       const finalToggles = { ...currentToggles };
-      
+
       // If no override toggles, it means it's a form save, so apply form slots locally first
       if (!overrideToggles) {
         formSlots.forEach((fs) => {
@@ -256,7 +291,7 @@ export default function AvailabilityDashboard({
 
       let slots = [];
       let pattern = undefined;
-      
+
       if (viewMode === "week") {
         // For week, send just the changes (toggles)
         slots = Object.entries(finalToggles).map(([key, enabled]) => {
@@ -293,15 +328,23 @@ export default function AvailabilityDashboard({
         pattern,
         ...(viewAs?.userId && { userId: viewAs.userId }),
         ...(viewAs?.mentorId && { mentorId: viewAs.mentorId }),
-        ...(requirementType && { requirementType }),
-        ...(requirementDesc && { requirementDesc }),
       };
-      const res = await availabilityApi.saveBatch(payload);
+
+      const reqPromises = [availabilityApi.saveBatch(payload)];
+
+      if (requirementType && !viewAs) {
+        reqPromises.push(createRequest({ requirementType, requirementDesc }));
+      }
+
+      const [res] = await Promise.all(reqPromises);
+
       setData(res);
       setToggles({});
       // Reset form if it was a form save
       if (!overrideToggles) {
         setFormSlots([{ id: 1, dateStr: "", startHour: null, endHour: null }]);
+        setRequirementType("");
+        setRequirementDesc("");
       }
     } catch (e) {
       setError(e.message || "Failed to save");
@@ -425,7 +468,7 @@ export default function AvailabilityDashboard({
         const isPast = new Date(endISO).getTime() <= nowMs;
         const isCurrent = new Date(startISO).getTime() <= nowMs && new Date(endISO).getTime() > nowMs;
         const isToday = dateStr === new Date().toISOString().slice(0, 10);
-        
+
         // check if this slot overlaps with any meeting
         const hasMeeting = Array.isArray(meetings) && meetings.some(m => {
           const mStart = new Date(m.startTime).getTime();
@@ -486,7 +529,7 @@ export default function AvailabilityDashboard({
               setTzViewMode(e.target.value);
               if (e.target.value !== "both") setTzView(e.target.value);
             }}
-            className="bg-navy-950 border border-white/[0.06] rounded-lg px-2.5 py-1.5 text-[11px] text-ink-200 focus:outline-none focus:ring-1 focus:ring-purple-500/50"
+            className="bg-[#12121C] border border-white/10 rounded-xl px-3 py-1.5 text-[11px] text-white font-medium focus:outline-none focus:ring-1 focus:ring-white/20 focus:border-white/20 transition cursor-pointer"
           >
             {TIMEZONE_VIEW_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
@@ -498,17 +541,21 @@ export default function AvailabilityDashboard({
       {/* ── Timezone toggle pills ── */}
       {tzViewMode === "both" && (
         <div className="flex">
-          <div className="inline-flex bg-navy-950 rounded-lg p-0.5 border border-white/[0.05]">
+          <div className="inline-flex bg-[#0A0A10] rounded-xl p-1 border border-white/[0.08]">
             <button
               onClick={() => setTzView("IST")}
-              className={`px-4 py-1.5 text-[11px] font-semibold rounded-md transition-all ${tzView === "IST" ? "bg-purple-600 text-white shadow" : "text-ink-500 hover:text-ink-200"
+              className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all duration-200 select-none focus:outline-none focus:ring-0 ${tzView === "IST"
+                ? "bg-[#1C1C28] text-white shadow-sm"
+                : "text-slate-400 hover:text-white hover:bg-white/[0.04]"
                 }`}
-            >
+            > 
               IST (GMT+5:30)
             </button>
             <button
               onClick={() => setTzView("UTC")}
-              className={`px-4 py-1.5 text-[11px] font-semibold rounded-md transition-all ${tzView === "UTC" ? "bg-purple-600 text-white shadow" : "text-ink-500 hover:text-ink-200"
+              className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all duration-200 select-none focus:outline-none focus:ring-0 ${tzView === "UTC"
+                ? "bg-[#1C1C28] text-white shadow-sm"
+                : "text-slate-400 hover:text-white hover:bg-white/[0.04]"
                 }`}
             >
               GMT (GMT+0)
@@ -532,7 +579,7 @@ export default function AvailabilityDashboard({
 
             {/* Add Time Slot */}
             <h3 className="text-xs font-semibold text-ink-100 mb-4 flex items-center gap-2">
-              <svg className="w-3.5 h-3.5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6l4 2" />
                 <circle cx="12" cy="12" r="10" strokeWidth={2} />
               </svg>
@@ -553,7 +600,7 @@ export default function AvailabilityDashboard({
                     <select
                       value={fs.dateStr}
                       onChange={(e) => updateFormSlot(fs.id, "dateStr", e.target.value)}
-                      className="w-full bg-navy-900 border border-white/[0.08] rounded-lg px-3 py-2 text-[11px] text-ink-100 focus:outline-none focus:ring-1 focus:ring-purple-500/50 transition font-semibold"
+                      className="w-full bg-navy-900 border border-white/[0.08] rounded-lg px-3 py-2 text-[11px] text-ink-100 focus:outline-none focus:ring-1 focus:ring-white/20 transition font-semibold"
                     >
                       <option value="">Select Date</option>
                       {gridDates.map((d) => {
@@ -590,7 +637,7 @@ export default function AvailabilityDashboard({
                                 : { id: fs.id, field: "startHour" }
                             )
                           }
-                          className="time-picker-el w-full bg-navy-900 border border-white/[0.08] rounded-lg px-2.5 py-1.5 text-[11px] text-ink-100 text-left flex justify-between items-center font-semibold hover:border-white/[0.15] focus:outline-none focus:ring-1 focus:ring-purple-500/50 transition"
+                          className="time-picker-el w-full bg-navy-900 border border-white/[0.08] rounded-lg px-2.5 py-1.5 text-[11px] text-ink-100 text-left flex justify-between items-center font-semibold hover:border-white/[0.15] focus:outline-none focus:ring-1 focus:ring-white/20 transition"
                         >
                           <span>{fs.startHour !== null ? fmtHour(fs.startHour, primaryTz) : "Start Time"}</span>
                           <svg className="w-3.5 h-3.5 text-ink-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -616,7 +663,7 @@ export default function AvailabilityDashboard({
                                     className={`text-[9px] font-semibold py-1.5 rounded transition-all text-center ${isDisabled
                                       ? "bg-navy-950/40 border border-white/[0.02] text-ink-700 cursor-not-allowed opacity-25 pointer-events-none"
                                       : selected
-                                        ? "bg-purple-600 text-white shadow shadow-purple-900/30"
+                                        ? "bg-white/20 text-white font-bold border border-white/20"
                                         : "bg-navy-900/60 border border-white/[0.03] text-ink-300 hover:bg-navy-800 hover:text-white"
                                       }`}
                                   >
@@ -644,7 +691,7 @@ export default function AvailabilityDashboard({
                                 : { id: fs.id, field: "endHour" }
                             )
                           }
-                          className="time-picker-el w-full bg-navy-900 border border-white/[0.08] rounded-lg px-2.5 py-1.5 text-[11px] text-ink-100 text-left flex justify-between items-center font-semibold hover:border-white/[0.15] focus:outline-none focus:ring-1 focus:ring-purple-500/50 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                          className="time-picker-el w-full bg-navy-900 border border-white/[0.08] rounded-lg px-2.5 py-1.5 text-[11px] text-ink-100 text-left flex justify-between items-center font-semibold hover:border-white/[0.15] focus:outline-none focus:ring-1 focus:ring-white/20 transition disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <span>{fs.endHour !== null ? fmtHour(fs.endHour, primaryTz) : "End Time"}</span>
                           <svg className="w-3.5 h-3.5 text-ink-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -671,7 +718,7 @@ export default function AvailabilityDashboard({
                                     className={`text-[9px] font-semibold py-1.5 rounded transition-all text-center ${isDisabled
                                       ? "bg-navy-950/40 border border-white/[0.02] text-ink-700 cursor-not-allowed opacity-25 pointer-events-none"
                                       : selected
-                                        ? "bg-purple-600 text-white shadow shadow-purple-900/30"
+                                        ? "bg-white/20 text-white font-bold border border-white/20"
                                         : "bg-navy-900/60 border border-white/[0.03] text-ink-300 hover:bg-navy-800 hover:text-white"
                                       }`}
                                   >
@@ -707,7 +754,7 @@ export default function AvailabilityDashboard({
               {formSlots.length < 5 && (
                 <button
                   onClick={addFormSlot}
-                  className="w-full py-1.5 flex items-center justify-center gap-1.5 text-[11px] font-medium text-purple-400 hover:text-purple-300 transition"
+                  className="w-full py-2 flex items-center justify-center gap-1.5 text-[11px] font-bold bg-[#161622] hover:bg-[#202030] text-white border border-white/10 hover:border-white/20 rounded-xl transition shadow-sm"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -724,7 +771,7 @@ export default function AvailabilityDashboard({
                 <div>
                   <h3 className="text-sm font-semibold text-white mb-1">Choose Call Type</h3>
                   <p className="text-[11px] text-ink-400 mb-3">What do you need help with?</p>
-                  
+
                   <div className="space-y-2">
                     {[
                       { value: "RESUME_REVAMP", label: "Resume Revamp" },
@@ -733,16 +780,16 @@ export default function AvailabilityDashboard({
                     ].map((option) => (
                       <label key={option.value} className="flex items-center gap-2.5 cursor-pointer group">
                         <div className="relative flex items-center justify-center">
-                          <input 
-                            type="radio" 
-                            name="callType" 
+                          <input
+                            type="radio"
+                            name="callType"
                             value={option.value}
                             checked={requirementType === option.value}
                             onChange={(e) => setRequirementType(e.target.value)}
                             className="peer sr-only"
                           />
-                          <div className="w-4 h-4 rounded-full border border-white/[0.15] bg-navy-950 peer-checked:border-purple-500 peer-checked:bg-purple-600/20 transition-all group-hover:border-purple-400"></div>
-                          <div className="absolute w-2 h-2 rounded-full bg-purple-400 scale-0 peer-checked:scale-100 transition-transform"></div>
+                          <div className="w-4 h-4 rounded-full border border-white/[0.15] bg-navy-950 peer-checked:border-white peer-checked:bg-white/20 transition-all group-hover:border-slate-300"></div>
+                          <div className="absolute w-2 h-2 rounded-full bg-white scale-0 peer-checked:scale-100 transition-transform"></div>
                         </div>
                         <span className="text-[12px] font-medium text-ink-200 group-hover:text-white transition-colors">{option.label}</span>
                       </label>
@@ -758,7 +805,7 @@ export default function AvailabilityDashboard({
                     value={requirementDesc}
                     onChange={(e) => setRequirementDesc(e.target.value)}
                     placeholder={"\"I am targeting backend roles.\nPlease review my resume and suggest improvements.\""}
-                    className="w-full h-24 bg-navy-950 border border-white/[0.08] rounded-xl px-3 py-2 text-[12px] text-ink-100 placeholder:text-ink-600 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/50 transition resize-none leading-relaxed"
+                    className="w-full h-24 bg-navy-950 border border-white/[0.08] rounded-xl px-3 py-2 text-[12px] text-ink-100 placeholder:text-ink-600 focus:outline-none focus:border-white/30 focus:ring-1 focus:ring-white/10 transition resize-none leading-relaxed"
                   />
                 </div>
               </div>
@@ -772,7 +819,7 @@ export default function AvailabilityDashboard({
                 <p className="text-[10px] text-ink-500 leading-relaxed">
                   All times are shown in your local timezone.
                   <br />
-                  Current: <span className="text-purple-400 font-semibold">{tzView} (GMT+5:30)</span>
+                  Current: <span className="text-white font-bold">{tzView} (GMT+5:30)</span>
                 </p>
               </div>
             </div>
@@ -780,22 +827,11 @@ export default function AvailabilityDashboard({
             {/* Apply + Save */}
             {!readOnly && (
               <div className="mt-5 space-y-2.5">
-                {/*
-                <button
-                  onClick={() => { applyFormSlots(); }}
-                  className="w-full py-2 rounded-lg text-[11px] font-semibold bg-purple-600/15 text-purple-300 border border-purple-500/20 hover:bg-purple-600/25 hover:border-purple-500/40 transition-all"
-                >
-                  <span className="flex items-center justify-center gap-1.5">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                    Apply Slots to Grid
-                  </span>
-                </button>
-                */}
                 <button
                   type="button"
                   onClick={() => commitSave()}
                   disabled={saving || !canSave}
-                  className="w-full py-2.5 rounded-lg text-[12px] font-bold bg-purple-600 text-white hover:bg-purple-500 transition-all disabled:opacity-40 disabled:pointer-events-none shadow-md shadow-purple-900/30"
+                  className="w-full py-2.5 rounded-xl text-[12px] font-bold bg-[#161622] hover:bg-[#202030] text-white border border-white/10 hover:border-white/20 transition-all disabled:opacity-40 disabled:pointer-events-none shadow-md"
                 >
                   {saving ? "Saving…" : "Save Availability"}
                 </button>
@@ -812,14 +848,14 @@ export default function AvailabilityDashboard({
             {/* Nav row */}
             <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
               <div className="flex items-center gap-2">
-                <div className="inline-flex items-center bg-navy-950 rounded-lg border border-white/[0.05] p-0.5">
+                <div className="inline-flex items-center bg-[#0A0A10] rounded-xl border border-white/[0.08] p-0.5">
                   <button
                     onClick={() => setWeekOffset((p) => p - 1)}
-                    className="p-1.5 text-ink-500 hover:text-ink-200 hover:bg-white/[0.05] rounded-md transition"
+                    className="p-1.5 text-slate-400 hover:text-white hover:bg-white/[0.05] rounded-lg transition"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
                   </button>
-                  <span className="text-[11px] font-medium text-ink-200 px-3 select-none whitespace-nowrap">
+                  <span className="text-[11px] font-bold text-white px-3 select-none whitespace-nowrap">
                     {(() => {
                       const s = new Date(gridStart + "T12:00:00Z");
                       const e = new Date(gridDates[6] + "T12:00:00Z");
@@ -830,34 +866,34 @@ export default function AvailabilityDashboard({
                   </span>
                   <button
                     onClick={() => setWeekOffset((p) => p + 1)}
-                    className="p-1.5 text-ink-500 hover:text-ink-200 hover:bg-white/[0.05] rounded-md transition"
+                    className="p-1.5 text-slate-400 hover:text-white hover:bg-white/[0.05] rounded-lg transition"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" /></svg>
                   </button>
                 </div>
                 <button
                   onClick={() => setWeekOffset(0)}
-                  className="px-3 py-1 bg-navy-950 border border-white/[0.05] rounded-lg text-[11px] font-medium text-ink-300 hover:text-ink-50 hover:bg-white/[0.05] transition"
+                  className="px-3.5 py-1.5 bg-[#161622] hover:bg-[#202030] border border-white/[0.08] rounded-xl text-[11px] font-bold text-white transition-all select-none focus:outline-none focus:ring-0 shadow-sm"
                 >
                   Today
                 </button>
               </div>
               {/* Tabs / Mode Toggle */}
-              <div className="flex bg-navy-950 rounded-lg p-0.5 border border-white/[0.05]">
+              <div className="flex bg-[#0A0A10] rounded-xl p-1 border border-white/[0.08]">
                 <button
                   onClick={() => setViewMode("template")}
-                  className={`px-3 py-1 text-[11px] font-semibold rounded-md transition-all ${viewMode === "template"
-                    ? "bg-purple-600 text-white shadow"
-                    : "text-ink-500 hover:text-ink-200"
+                  className={`px-3.5 py-1.5 text-[11px] font-bold rounded-lg transition-all duration-200 select-none focus:outline-none focus:ring-0 ${viewMode === "template"
+                    ? "bg-[#1C1C28] text-white shadow-sm"
+                    : "text-slate-400 hover:text-white hover:bg-white/[0.04]"
                     }`}
                 >
                   Every Week
                 </button>
                 <button
                   onClick={() => setViewMode("week")}
-                  className={`px-3 py-1 text-[11px] font-semibold rounded-md transition-all ${viewMode === "week"
-                    ? "bg-purple-600 text-white shadow"
-                    : "text-ink-500 hover:text-ink-200"
+                  className={`px-3.5 py-1.5 text-[11px] font-bold rounded-lg transition-all duration-200 select-none focus:outline-none focus:ring-0 ${viewMode === "week"
+                    ? "bg-[#1C1C28] text-white shadow-sm"
+                    : "text-slate-400 hover:text-white hover:bg-white/[0.04]"
                     }`}
                 >
                   This Week Only
@@ -901,13 +937,13 @@ export default function AvailabilityDashboard({
                     return (
                       <div
                         key={d}
-                        className={`flex-1 flex flex-col items-center justify-center border-r border-white/[0.03] last:border-r-0 ${isToday ? "bg-purple-900/20" : ""
+                        className={`flex-1 flex flex-col items-center justify-center border-r border-white/[0.03] last:border-r-0 ${isToday ? "bg-white/[0.06]" : ""
                           }`}
                       >
-                        <span className={`text-[11px] font-bold ${isToday ? "text-purple-300" : "text-ink-100"}`}>
+                        <span className={`text-[11px] font-bold ${isToday ? "text-white" : "text-ink-100"}`}>
                           {dayName}
                         </span>
-                        <span className={`text-[9px] ${isToday ? "text-purple-400" : "text-ink-500"}`}>{dayNum}</span>
+                        <span className={`text-[9px] ${isToday ? "text-slate-300 font-semibold" : "text-ink-500"}`}>{dayNum}</span>
                       </div>
                     );
                   })}
@@ -936,7 +972,7 @@ export default function AvailabilityDashboard({
                         return (
                           <div
                             key={dateStr}
-                            className={`flex-1 relative border-r border-white/[0.03] last:border-r-0 ${isToday ? "bg-purple-900/10" : ""
+                            className={`flex-1 relative border-r border-white/[0.03] last:border-r-0 ${isToday ? "bg-white/[0.02]" : ""
                               }`}
                             style={{ height: HOURS.length * GRID_HOUR_HEIGHT + 16 }}
                           >
@@ -951,26 +987,37 @@ export default function AvailabilityDashboard({
                               const isPast = viewMode === "week" && new Date(endISO).getTime() <= nowMs;
                               const isCurrent = viewMode === "week" && new Date(startISO).getTime() <= nowMs && new Date(endISO).getTime() > nowMs;
 
+                              const blockMeetings = Array.isArray(meetings) ? meetings.filter(m =>
+                                new Date(m.startTime).getTime() >= new Date(startISO).getTime() &&
+                                new Date(m.startTime).getTime() < new Date(endISO).getTime()
+                              ).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) : [];
+
+                              const activeMeeting = blockMeetings.find(m => m.status !== "CANCELLED");
+
                               return (
                                 <div
                                   key={gi}
-                                  className={`absolute left-1 right-1 rounded-lg overflow-hidden transition-colors shadow-lg cursor-default ${
-                                    isPast
+                                  onClick={() => {
+                                    if (!isPast) {
+                                      setSelectedSlotDetails({ group: g, dateStr, meetings: blockMeetings, activeMeeting, label1, label2, isCurrent });
+                                    }
+                                  }}
+                                  className={`absolute left-1 right-1 rounded-lg overflow-hidden transition-all shadow-lg ${isPast ? "cursor-default" : "cursor-pointer hover:-translate-y-[1px] hover:shadow-xl"
+                                    } ${isPast
                                       ? "bg-navy-950/60 border border-red-900/30 opacity-75"
                                       : isCurrent
-                                        ? "bg-purple-950/70 border border-purple-500/60 opacity-95 shadow shadow-purple-500/10"
-                                        : "bg-purple-800/50 border border-purple-500/40 hover:bg-purple-700/60"
-                                  }`}
+                                        ? "bg-[#1C1C28] border border-white/20 opacity-95 shadow-md"
+                                        : "bg-[#181824] border border-white/10 hover:bg-[#202030] hover:border-white/20"
+                                    }`}
                                   style={{ top: topPx + 2, height: heightPx - 4 }}
                                 >
                                   <div className="p-1.5 h-full flex flex-col justify-between relative">
                                     <div>
                                       <div className="flex items-center justify-between gap-1 w-full">
-                                        <span className={`text-[9px] font-bold leading-tight ${
-                                          isPast
+                                        <span className={`text-[9px] font-bold leading-tight ${isPast
                                             ? "text-red-300/90"
-                                            : "text-purple-100"
-                                        }`}>{label1}</span>
+                                            : "text-white"
+                                          }`}>{label1}</span>
                                         {isPast && (
                                           <span className="px-1.5 py-0.5 text-[7px] font-bold bg-red-950 text-red-400 border border-red-900/50 rounded shrink-0">
                                             Past
@@ -982,27 +1029,19 @@ export default function AvailabilityDashboard({
                                           </span>
                                         )}
                                       </div>
-                                      <span className={`text-[8px] leading-tight block mt-0.5 ${
-                                        isPast
+                                      <span className={`text-[8px] leading-tight block mt-0.5 ${isPast
                                           ? "text-red-400/60"
-                                          : isCurrent
-                                            ? "text-purple-300/80"
-                                            : "text-purple-300/70"
-                                      }`}>
+                                          : "text-slate-300 font-medium"
+                                        }`}>
                                         ({label2})
                                       </span>
                                     </div>
-                                    {/* Remove button (permanently visible, hidden in past/current slots, compact size) */}
-                                    {!readOnly && !isPast && !isCurrent && (
-                                      <button
-                                        onClick={() => removeBlockGroup(dateStr, g.blocks.map((b) => b.utcHour))}
-                                        className="absolute bottom-1 right-1 w-5 h-5 rounded-full bg-red-500/90 hover:bg-red-600 shadow transition-colors flex items-center justify-center"
-                                        title="Remove this slot"
-                                      >
-                                        <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
-                                        </svg>
-                                      </button>
+                                    {activeMeeting && (
+                                      <div className="absolute bottom-1 right-1">
+                                        <span className="px-1.5 py-0.5 text-[7px] font-bold bg-emerald-600 text-white rounded shadow-sm border border-emerald-500/30">
+                                          Meeting
+                                        </span>
+                                      </div>
                                     )}
                                   </div>
                                 </div>
@@ -1025,9 +1064,112 @@ export default function AvailabilityDashboard({
             primaryTz={primaryTz}
             secondaryTz={secondaryTz}
             tzView={tzView}
+            onRefresh={fetchWeekly}
+            role={role}
           />
         </div>
       </div>
+
+      {/* Slot Details Modal */}
+      {selectedSlotDetails && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 transition-opacity">
+          <div className="bg-[#0A0A10]/95 border border-white/[0.08] rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl relative shadow-purple-950/10">
+            <button
+              onClick={() => setSelectedSlotDetails(null)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-white transition-colors bg-white/[0.03] hover:bg-white/[0.08] p-1.5 rounded-full border border-white/[0.05]"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <div className="p-6 pb-4 border-b border-white/[0.04]">
+              <h3 className="text-base font-bold text-white tracking-tight">Slot Details</h3>
+              <p className="text-xs text-slate-400 font-medium mt-1 font-mono tracking-wide uppercase">
+                {new Date(selectedSlotDetails.dateStr).toLocaleDateString("en-US", { weekday: 'long', month: 'long', day: 'numeric' })}
+              </p>
+            </div>
+
+            <div className="p-6 space-y-5 max-h-[70vh] overflow-y-auto mq-scroll">
+              <div className="bg-[#12121A] border border-white/[0.06] rounded-2xl p-5 flex flex-col items-center justify-center text-center relative overflow-hidden shadow-inner">
+                <div className="absolute top-0 left-0 right-0 h-[1.5px] bg-gradient-to-r from-transparent via-purple-500/35 to-transparent opacity-50"></div>
+                <span className="text-base font-black text-white mb-1.5">{selectedSlotDetails.label1}</span>
+                <span className="text-[10px] text-slate-400 font-mono tracking-wider uppercase">GMT: {selectedSlotDetails.label2}</span>
+              </div>
+
+              {selectedSlotDetails.meetings.length > 0 && (
+                <div className="space-y-3.5">
+                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Slot History</h4>
+                  {selectedSlotDetails.meetings.map(m => {
+                    const isActive = m.status !== "CANCELLED";
+
+                    let cancelLabel = "Cancelled";
+                    let cancelColor = "text-red-400";
+                    let cancelBg = "bg-red-500/10";
+                    let cancelBorder = "border-red-500/20";
+
+                    if (!isActive && m.cancelledBy) {
+                      if (m.cancelledBy === m.bookedUserId) {
+                        cancelLabel = "Cancelled by User";
+                        cancelColor = "text-orange-400";
+                        cancelBg = "bg-orange-500/10";
+                        cancelBorder = "border-orange-500/20";
+                      } else if (m.cancelledBy === m.bookedMentorId) {
+                        cancelLabel = "Cancelled by Mentor";
+                        cancelColor = "text-rose-400";
+                        cancelBg = "bg-rose-500/10";
+                        cancelBorder = "border-rose-500/20";
+                      } else {
+                        cancelLabel = "Cancelled by Admin";
+                        cancelColor = "text-red-400";
+                        cancelBg = "bg-red-500/10";
+                        cancelBorder = "border-red-500/20";
+                      }
+                    }
+
+                    return (
+                      <div key={m.id} className={`border rounded-2xl p-4 transition-all ${isActive ? 'bg-emerald-950/15 border-emerald-500/25 shadow-sm' : `bg-white/[0.01] ${cancelBorder} opacity-75 hover:opacity-100`}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className={`text-[9px] font-extrabold uppercase tracking-widest ${isActive ? 'text-emerald-400' : cancelColor}`}>
+                            {isActive ? 'Scheduled Meeting' : cancelLabel}
+                          </span>
+                          <span className={`px-2 py-0.5 text-[8px] font-bold rounded-full border ${isActive ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : `${cancelBg} ${cancelColor} ${cancelBorder}`}`}>
+                            {isActive ? 'Active' : 'Cancelled'}
+                          </span>
+                        </div>
+                        <h4 className={`text-sm font-bold mt-2 mb-1 ${isActive ? 'text-white' : 'text-slate-500 line-through'}`}>{m.title}</h4>
+                        <p className="text-xs text-slate-400 font-medium">With {role === 'MENTOR' ? (m.user?.name || "Participant") : (m.mentor?.name || m.user?.name)}</p>
+
+                        {isActive && (
+                          <button
+                            onClick={() => handleSlotCancelMeeting(m.id)}
+                            disabled={slotActionLoading || selectedSlotDetails.isCurrent}
+                            className="w-full mt-4 py-2.5 bg-red-950/25 hover:bg-red-950/45 border border-red-500/20 hover:border-red-500/35 text-red-400 font-bold text-[11px] rounded-xl transition flex items-center justify-center gap-1.5 disabled:opacity-50 duration-200"
+                          >
+                            <CalendarX2 className="w-3.5 h-3.5" />
+                            {slotActionLoading ? "Cancelling..." : "Cancel Meeting"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Only show delete availability if there is NO active meeting */}
+              {!selectedSlotDetails.activeMeeting && !readOnly && !selectedSlotDetails.isCurrent && (
+                <div className="pt-2.5 border-t border-white/[0.04]">
+                  <button
+                    onClick={handleSlotDeleteAvailability}
+                    className="w-full py-2.5 bg-red-950/20 hover:bg-red-950/40 border border-red-900/30 hover:border-red-800/40 text-red-300/80 hover:text-red-200 font-semibold text-xs rounded-xl transition flex items-center justify-center gap-2 duration-200"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete Availability Slot
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

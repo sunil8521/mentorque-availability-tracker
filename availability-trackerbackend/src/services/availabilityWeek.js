@@ -175,19 +175,12 @@ export async function loadWeeklyAvailability(owner, weekStartInput, scope = "wee
   const exceptions = scope === "template" ? [] : await getExceptionsForWeek(owner, start);
   const excMap = exceptionsMap(exceptions);
 
-  const user = await prisma.user.findUnique({
-    where: { id: owner.userId || owner.mentorId },
-    select: { requirementType: true, requirementDesc: true }
-  });
-
   return {
     weekStart: dateStrs[0],
     dates: dateStrs,
     availability: buildAvailabilityByDate(dateStrs, start, template, excMap),
     hasTemplate: template.length > 0,
     exceptionCount: exceptions.length,
-    requirementType: user?.requirementType || null,
-    requirementDesc: user?.requirementDesc || null,
   };
 }
 

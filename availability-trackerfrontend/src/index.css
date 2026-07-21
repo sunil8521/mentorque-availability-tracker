@@ -34,6 +34,14 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+button:focus,
+button:focus-visible,
+button:active {
+  outline: none !important;
+  box-shadow: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
 @layer components {
   .mq-card {
     @apply rounded-xl border border-white/[0.08] bg-white/[0.03] backdrop-blur-xl

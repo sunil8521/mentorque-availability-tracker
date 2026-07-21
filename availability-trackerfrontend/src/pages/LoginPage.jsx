@@ -57,7 +57,7 @@ export default function LoginPage() {
                 required
                 autoFocus
                 autoComplete="email"
-                className="w-full px-4 py-3 rounded-xl bg-navy-950 border border-white/[0.06] text-ink-50 placeholder-ink-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition-colors"
+                className="w-full px-4 py-3 rounded-xl bg-navy-950 border border-white/[0.08] text-ink-50 placeholder-ink-500 focus:outline-none focus:border-white/30 focus:ring-1 focus:ring-white/10 transition-colors"
                 placeholder="you@example.com"
               />
             </div>
@@ -71,7 +71,7 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 autoComplete="current-password"
-                className="w-full px-4 py-3 rounded-xl bg-navy-950 border border-white/[0.06] text-ink-50 placeholder-ink-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition-colors tracking-widest"
+                className="w-full px-4 py-3 rounded-xl bg-navy-950 border border-white/[0.08] text-ink-50 placeholder-ink-500 focus:outline-none focus:border-white/30 focus:ring-1 focus:ring-white/10 transition-colors tracking-widest"
                 placeholder="••••••••"
               />
             </div>
@@ -79,7 +79,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 mt-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-[14px] transition-all disabled:opacity-50"
+              className="w-full py-3 mt-2 rounded-xl bg-[#1C1C28] hover:bg-[#252538] text-white border border-white/15 hover:border-white/25 font-bold text-[14px] transition-all disabled:opacity-50 shadow-md"
             >
               {loading ? (
                 <span className="inline-flex items-center justify-center gap-2">

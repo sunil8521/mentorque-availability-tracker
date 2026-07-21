@@ -14,24 +14,60 @@ export async function listUsers(req, res, next) {
   try {
     const users = await prisma.user.findMany({
       where: { role: "USER" },
-      select: { 
-        id: true, 
-        name: true, 
-        email: true, 
-        timezone: true, 
-        description: true, 
-        tags: true, 
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        timezone: true,
+        description: true,
+        tags: true,
         createdAt: true,
-        requirementType: true,
-        requirementDesc: true,
+        requests: {
+          where: { status: "PENDING" },
+          orderBy: { createdAt: "desc" },
+          take: 1
+        },
         meetingsAsUser: {
+          where: { endTime: { gt: new Date() } },
+          select: { id: true, startTime: true, endTime: true, status: true, title: true, callType: true, cancelledBy: true, cancelledAt: true, mentor: { select: { name: true } } }
+        },
+        availabilityAsUser: {
           where: { startTime: { gt: new Date() } },
-          select: { id: true, startTime: true, endTime: true, mentor: { select: { name: true } } }
+          take: 1,
+          select: { id: true }
         }
       },
       orderBy: { name: "asc" },
     });
-    res.json(users);
+
+    const now = Date.now();
+    const mappedUsers = await Promise.all(users.map(async u => {
+      let hasFutureAvailability = false;
+      if (u.requests.length > 0) {
+        const owner = { userId: u.id, mentorId: null, role: "USER" };
+        const avail = await loadWeeklyAvailability(owner, undefined, "week");
+        outer: for (const date in avail.availability) {
+          for (const slot of avail.availability[date]) {
+            if (new Date(slot.startTime).getTime() > now) {
+              hasFutureAvailability = true;
+              break outer;
+            }
+          }
+        }
+      }
+
+      return {
+        ...u,
+        requirementType: u.requests.length > 0 ? u.requests[0].requirementType : null,
+        requirementDesc: u.requests.length > 0 ? u.requests[0].requirementDesc : null,
+        activeRequestId: u.requests.length > 0 ? u.requests[0].id : null,
+        hasFutureAvailability,
+        requests: undefined,
+        availabilityAsUser: undefined
+      };
+    }));
+
+    res.json(mappedUsers);
   } catch (e) {
     next(e);
   }
@@ -144,7 +180,7 @@ export async function getOverlappingSlots(req, res, next) {
 export async function scheduleMeeting(req, res, next) {
   try {
     const adminId = req.userId;
-    const { title, startTime, endTime, date, timezone, participantEmails, bookedUserId, bookedMentorId, callType, what, description } = req.body;
+    const { title, startTime, endTime, date, timezone, participantEmails, bookedUserId, bookedMentorId, callType, what, description, requestId } = req.body;
 
     if (!title?.trim()) {
       return res.status(400).json({ error: "title is required" });
@@ -193,6 +229,7 @@ export async function scheduleMeeting(req, res, next) {
         bookedUserId: bookedUserId || null,
         bookedMentorId: bookedMentorId || null,
         callType: callType || null,
+        requestId: requestId || null,
         what: what || null,
         description: description || null,
         meetLink: null,
@@ -200,6 +237,13 @@ export async function scheduleMeeting(req, res, next) {
         googleEventId: null,
       },
     });
+
+    if (bookedUserId) {
+      await prisma.mentoringRequest.updateMany({
+        where: { userId: bookedUserId, status: "PENDING" },
+        data: { status: "SCHEDULED" }
+      }).catch(err => console.error("Failed to update request status:", err));
+    }
 
     if (emails.length > 0) {
       await prisma.meetingParticipant.createMany({
@@ -232,7 +276,7 @@ export async function scheduleMeeting(req, res, next) {
     if (!meetLink) {
       // Mock for testing when Google API is not configured
       const uuidPart = uuidv4().replace(/-/g, "");
-      meetLink = `https://meet.google.com/${uuidPart.substring(0,3)}-${uuidPart.substring(3,7)}-${uuidPart.substring(7,10)}`;
+      meetLink = `https://meet.google.com/${uuidPart.substring(0, 3)}-${uuidPart.substring(3, 7)}-${uuidPart.substring(7, 10)}`;
     }
 
     await prisma.meeting.update({
@@ -263,7 +307,14 @@ export async function recommendMentors(req, res, next) {
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { requirementType: true, requirementDesc: true, tags: true },
+      select: {
+        tags: true,
+        requests: {
+          where: { status: "PENDING" },
+          take: 1,
+          orderBy: { createdAt: "desc" }
+        }
+      },
     });
 
     if (!user) {
@@ -323,7 +374,7 @@ Available Mentors:
     ]);
 
     const chain = prompt.pipe(structuredLLM);
-    
+
     const mentorsListString = mentors
       .map(
         (m) =>
@@ -331,9 +382,11 @@ Available Mentors:
       )
       .join("\n");
 
+    const activeReq = user.requests && user.requests.length > 0 ? user.requests[0] : null;
+
     const result = await chain.invoke({
-      callType: user.requirementType || "General Mentoring",
-      userDesc: user.requirementDesc || "No description provided",
+      callType: activeReq?.requirementType || "General Mentoring",
+      userDesc: activeReq?.requirementDesc || "No description provided",
       userTags: user.tags.join(", ") || "None",
       mentorsList: mentorsListString,
     });

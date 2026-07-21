@@ -1,4 +1,4 @@
-import { get, del } from "./client.js";
+import { get, del, patch } from "./client.js";
 
 export async function listMeetings(params = {}) {
   const q = new URLSearchParams(params).toString();
@@ -7,4 +7,8 @@ export async function listMeetings(params = {}) {
 
 export async function deleteMeeting(meetingId) {
   return del(`/api/meetings/${meetingId}`);
+}
+
+export async function cancelMeeting(meetingId) {
+  return patch(`/api/meetings/${meetingId}/cancel`);
 }

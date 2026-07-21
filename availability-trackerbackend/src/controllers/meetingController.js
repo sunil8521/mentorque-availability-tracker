@@ -46,3 +46,51 @@ export const deleteMeeting = async (req, res) => {
     });
   }
 };
+
+// simple: cancel a meeting (user or admin can cancel)
+export async function cancelMeeting(req, res, next) {
+  try {
+    const { id } = req.params;
+    const meeting = await prisma.meeting.findUnique({ where: { id } });
+
+    if (!meeting) {
+      return res.status(404).json({ error: "Meeting not found" });
+    }
+
+    // only allow cancel if user is a participant or admin
+    const isParticipant =
+      req.userId === meeting.bookedUserId ||
+      req.userId === meeting.bookedMentorId ||
+      req.userId === meeting.adminId;
+
+    if (req.userRole !== "ADMIN" && !isParticipant) {
+      return res.status(403).json({ error: "Not authorized to cancel this meeting" });
+    }
+
+    // only allow cancel if meeting is in the future
+    if (new Date(meeting.startTime) <= new Date()) {
+      return res.status(400).json({ error: "Cannot cancel a meeting that has already started" });
+    }
+
+    const updated = await prisma.meeting.update({
+      where: { id },
+      data: {
+        status: "CANCELLED",
+        cancelledBy: req.userId,
+        cancelledAt: new Date(),
+      },
+      include: { user: true, mentor: true },
+    });
+
+    if (updated.requestId) {
+      await prisma.mentoringRequest.update({
+        where: { id: updated.requestId },
+        data: { status: "PENDING" },
+      }).catch(err => console.error("Failed to transition request back to PENDING:", err));
+    }
+
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+}
